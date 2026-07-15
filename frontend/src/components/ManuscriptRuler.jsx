@@ -101,10 +101,15 @@ export default function ManuscriptRuler() {
   const stateRef = useRef(state);
   const hasFileRef = useRef(false);
   const addBookmarkRef = useRef(() => {});
+  const pageSizeRef = useRef({ w: 0, h: 0 });
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    pageSizeRef.current = pageSize;
+  }, [pageSize]);
 
   // Persist state & bookmarks
   useEffect(() => {
@@ -391,11 +396,17 @@ export default function ManuscriptRuler() {
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
-          moveRulerBy(state.rulerStep);
+          setState((s) => {
+            const max = Math.max(0, pageSizeRef.current.h - s.rulerHeight);
+            return { ...s, rulerY: Math.min(max, Math.max(0, s.rulerY + s.rulerStep)) };
+          });
           break;
         case "ArrowUp":
           e.preventDefault();
-          moveRulerBy(-state.rulerStep);
+          setState((s) => {
+            const max = Math.max(0, pageSizeRef.current.h - s.rulerHeight);
+            return { ...s, rulerY: Math.min(max, Math.max(0, s.rulerY - s.rulerStep)) };
+          });
           break;
         case "PageDown":
           e.preventDefault();
