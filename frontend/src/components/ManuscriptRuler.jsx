@@ -29,6 +29,9 @@ import {
   Edit3,
   Save,
   ExternalLink,
+  Scissors,
+  Copy,
+  Highlighter,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
@@ -117,9 +120,19 @@ function saveKV(key, data) {
 
 const EMPTY_INFO = {
   title: "",
+  altTitle: "",
+  author: "",
+  copyist: "",
+  copyDate: "",
+  era: "",
   number: "",
   library: "",
   catalog: "",
+  language: "العربية",
+  script: "",
+  subject: "",
+  foliosCount: "",
+  dimensions: "",
   downloadUrl: "",
   notes: "",
 };
@@ -145,7 +158,11 @@ export default function ManuscriptRuler() {
   const [showInfoCard, setShowInfoCard] = useState(true);
   const [showInfoEditor, setShowInfoEditor] = useState(false);
   const [commentModal, setCommentModal] = useState(null); // {editingId?, page, folio, y, text}
+  const [snipping, setSnipping] = useState(false);
+  const [snipResult, setSnipResult] = useState(null); // {dataUrl, folio, line, filename}
   const [toast, setToast] = useState("");
+
+  const hasFile = Boolean(doc);
   const [isFs, setIsFs] = useState(false);
 
   const canvasRef = useRef(null);
@@ -161,6 +178,8 @@ export default function ManuscriptRuler() {
   const prevPageRef = useRef(() => {});
   const zoomInRef = useRef(() => {});
   const zoomOutRef = useRef(() => {});
+  const openAddCommentRef = useRef(() => {});
+  const snipRef = useRef(() => {});
 
   useEffect(() => {
     stateRef.current = state;
@@ -513,17 +532,19 @@ export default function ManuscriptRuler() {
     const folio = state.folioMode
       ? formatFolio(state.page, { startFolio: state.folioStart, offset: state.folioOffset })
       : `صفحة ${state.page}`;
+    const line = Math.max(1, Math.round(state.rulerY / Math.max(1, state.rulerStep)) + 1);
     setCommentModal({
       editingId: null,
       page: state.page,
       folio,
+      line,
       y: state.rulerY,
       text: "",
     });
   };
 
   const openEditComment = (c) => {
-    setCommentModal({ editingId: c.id, page: c.page, folio: c.folio, y: c.y, text: c.text });
+    setCommentModal({ editingId: c.id, page: c.page, folio: c.folio, line: c.line || 1, y: c.y, text: c.text });
   };
 
   const saveComment = (text) => {
@@ -548,6 +569,7 @@ export default function ManuscriptRuler() {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         page: commentModal.page,
         folio: commentModal.folio,
+        line: commentModal.line,
         y: commentModal.y,
         text: t,
         createdAt: new Date().toISOString(),
@@ -581,7 +603,8 @@ export default function ManuscriptRuler() {
       .map((c, i) => {
         const dt = new Date(c.createdAt).toLocaleString("ar-EG");
         const safeText = escapeHtml(c.text).replace(/\n/g, "<br>");
-        return `<tr><td>${i + 1}</td><td>${escapeHtml(c.folio)}</td><td>${safeText}</td><td>${dt}</td></tr>`;
+        const ref = c.line ? `${escapeHtml(c.folio)} · س${c.line}` : escapeHtml(c.folio);
+        return `<tr><td>${i + 1}</td><td>${ref}</td><td>${safeText}</td><td>${dt}</td></tr>`;
       })
       .join("\n");
 
@@ -609,9 +632,19 @@ export default function ManuscriptRuler() {
 <h1>تعليقات المخطوط</h1>
 <div class="info">
   ${info.title ? `<div><b>عنوان المخطوط:</b> ${escapeHtml(info.title)}</div>` : ""}
-  ${info.number ? `<div><b>الرقم / رقم النسخة:</b> ${escapeHtml(info.number)}</div>` : ""}
+  ${info.altTitle ? `<div><b>عناوين أخرى:</b> ${escapeHtml(info.altTitle)}</div>` : ""}
+  ${info.author ? `<div><b>المؤلف:</b> ${escapeHtml(info.author)}</div>` : ""}
+  ${info.copyist ? `<div><b>الناسخ:</b> ${escapeHtml(info.copyist)}</div>` : ""}
+  ${info.copyDate ? `<div><b>تاريخ النسخ:</b> ${escapeHtml(info.copyDate)}</div>` : ""}
+  ${info.era ? `<div><b>العصر / القرن:</b> ${escapeHtml(info.era)}</div>` : ""}
+  ${info.number ? `<div><b>رقم النسخة:</b> ${escapeHtml(info.number)}</div>` : ""}
   ${info.library ? `<div><b>المكتبة:</b> ${escapeHtml(info.library)}</div>` : ""}
   ${info.catalog ? `<div><b>الفهرسة:</b> ${escapeHtml(info.catalog)}</div>` : ""}
+  ${info.subject ? `<div><b>الموضوع:</b> ${escapeHtml(info.subject)}</div>` : ""}
+  ${info.language ? `<div><b>اللغة:</b> ${escapeHtml(info.language)}</div>` : ""}
+  ${info.script ? `<div><b>نوع الخط:</b> ${escapeHtml(info.script)}</div>` : ""}
+  ${info.foliosCount ? `<div><b>عدد الأوراق:</b> ${escapeHtml(info.foliosCount)}</div>` : ""}
+  ${info.dimensions ? `<div><b>الأبعاد:</b> ${escapeHtml(info.dimensions)}</div>` : ""}
   ${info.downloadUrl ? `<div><b>رابط التحميل:</b> <a href="${escapeHtml(info.downloadUrl)}">${escapeHtml(info.downloadUrl)}</a></div>` : ""}
   ${info.notes ? `<div><b>ملاحظات فهرسة:</b> ${escapeHtml(info.notes).replace(/\n/g, "<br>")}</div>` : ""}
   <div><b>الملف:</b> ${escapeHtml(state.fileName || "")}</div>
@@ -638,6 +671,62 @@ ${sorted.length === 0
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     showToast("تم تصدير التعليقات");
+  };
+
+  // ---------------- Snip (screenshot) ----------------
+  const beginSnip = () => {
+    if (!doc) return;
+    setSnipping(true);
+    showToast("اسحب مستطيلاً على الصفحة لالتقاط لقطة");
+  };
+
+  const performSnip = async (rect) => {
+    if (!canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dispW = parseFloat(canvas.style.width) || canvas.width;
+    const scaleX = canvas.width / dispW;
+    const scaleY = canvas.height / (parseFloat(canvas.style.height) || canvas.height);
+    const sx = Math.max(0, Math.floor(rect.x * scaleX));
+    const sy = Math.max(0, Math.floor(rect.y * scaleY));
+    const sw = Math.max(1, Math.floor(rect.w * scaleX));
+    const sh = Math.max(1, Math.floor(rect.h * scaleY));
+    const off = document.createElement("canvas");
+    off.width = sw;
+    off.height = sh;
+    const ctx = off.getContext("2d");
+    ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+
+    const folio = state.folioMode
+      ? formatFolio(state.page, { startFolio: state.folioStart, offset: state.folioOffset })
+      : `صفحة ${state.page}`;
+    const line = Math.max(1, Math.round((rect.y + rect.h / 2) / Math.max(1, state.rulerStep)) + 1);
+    const title = currentInfo.title || state.fileName.replace(/\.[^.]+$/, "") || "manuscript";
+    const filename = `${title} — ${folio} — س${line}.png`.replace(/[/\\?%*:|"<>]/g, "-");
+    const dataUrl = off.toDataURL("image/png");
+    setSnipping(false);
+    setSnipResult({ dataUrl, folio, line, filename, title });
+  };
+
+  const saveSnipToFile = (dataUrl, filename) => {
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast("تم حفظ اللقطة");
+  };
+
+  const copySnipToClipboard = async (dataUrl) => {
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      showToast("نُسخت اللقطة إلى الحافظة");
+    } catch (e) {
+      console.error(e);
+      showToast("تعذّر النسخ إلى الحافظة");
+    }
   };
 
   const toggleFullscreen = async () => {
@@ -682,7 +771,12 @@ ${sorted.length === 0
       }
       if (e.ctrlKey && e.key.toLowerCase() === "m") {
         e.preventDefault();
-        if (hasFileRef.current) openAddComment();
+        if (hasFileRef.current) openAddCommentRef.current();
+        return;
+      }
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (hasFileRef.current) snipRef.current();
         return;
       }
       if (e.ctrlKey && (e.key === "+" || e.key === "=")) {
@@ -749,21 +843,18 @@ ${sorted.length === 0
   // Ctrl + wheel = zoom, plain wheel at edge = navigate pages
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
+    if (!el || !hasFile) return;
     let lastNavAt = 0;
     const onWheel = (e) => {
       if (e.ctrlKey) {
         e.preventDefault();
-        if (e.deltaY < 0) zoomIn();
-        else zoomOut();
+        if (e.deltaY < 0) zoomInRef.current();
+        else zoomOutRef.current();
         return;
       }
-      // Plain wheel — try to scroll; if already at edge, navigate pages
-      if (!hasFileRef.current) return;
       const atTop = el.scrollTop <= 0;
       const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
       const now = Date.now();
-      // debounce so scrolling doesn't jump 10 pages
       if (now - lastNavAt < 350) return;
       if (e.deltaY > 0 && atBottom) {
         e.preventDefault();
@@ -777,8 +868,7 @@ ${sorted.length === 0
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [hasFile]);
 
   const rulerColorRGBA = (() => {
     // hex -> rgba with opacity
@@ -789,8 +879,6 @@ ${sorted.length === 0
     const b = bigint & 255;
     return `rgba(${r},${g},${b},${state.rulerOpacity})`;
   })();
-
-  const hasFile = Boolean(doc);
 
   useEffect(() => {
     hasFileRef.current = hasFile;
@@ -808,6 +896,12 @@ ${sorted.length === 0
     zoomOutRef.current = zoomOut;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageCount, doc]);
+
+  useEffect(() => {
+    openAddCommentRef.current = openAddComment;
+    snipRef.current = beginSnip;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.fileKey, state.page, state.rulerY, state.rulerStep, state.folioMode, state.folioStart, state.folioOffset, doc]);
 
   return (
     <div className={`mr-app ${isFs ? "mr-hide-chrome" : ""}`} data-testid="mr-app">
@@ -964,6 +1058,16 @@ ${sorted.length === 0
           {currentComments.length > 0 && (
             <span style={{ fontSize: 11, marginInlineStart: 2 }}>{currentComments.length}</span>
           )}
+        </button>
+
+        <button
+          className={`mr-btn mr-btn-icon ${snipping ? "mr-btn-active" : ""}`}
+          onClick={beginSnip}
+          disabled={!hasFile}
+          title="التقاط لقطة (Ctrl+Shift+S)"
+          data-testid="mr-btn-snip"
+        >
+          <Scissors size={16} />
         </button>
 
         <button
@@ -1525,14 +1629,32 @@ ${sorted.length === 0
               </button>
             </div>
             <div className="mr-info-card-body">
+              {currentInfo.author && (
+                <div><span className="k">المؤلف:</span> {currentInfo.author}</div>
+              )}
+              {currentInfo.copyist && (
+                <div><span className="k">الناسخ:</span> {currentInfo.copyist}</div>
+              )}
+              {currentInfo.copyDate && (
+                <div><span className="k">تاريخ النسخ:</span> {currentInfo.copyDate}</div>
+              )}
               {currentInfo.number && (
-                <div><span className="k">الرقم:</span> {currentInfo.number}</div>
+                <div><span className="k">رقم النسخة:</span> {currentInfo.number}</div>
               )}
               {currentInfo.library && (
                 <div><span className="k">المكتبة:</span> {currentInfo.library}</div>
               )}
               {currentInfo.catalog && (
                 <div><span className="k">الفهرسة:</span> {currentInfo.catalog}</div>
+              )}
+              {currentInfo.subject && (
+                <div><span className="k">الموضوع:</span> {currentInfo.subject}</div>
+              )}
+              {currentInfo.script && (
+                <div><span className="k">الخط:</span> {currentInfo.script}</div>
+              )}
+              {currentInfo.foliosCount && (
+                <div><span className="k">عدد الأوراق:</span> {currentInfo.foliosCount}</div>
               )}
               {currentInfo.downloadUrl && (
                 <div>
@@ -1612,7 +1734,7 @@ ${sorted.length === 0
                           onClick={() => goToComment(c)}
                           title="اذهب إلى الموضع"
                         >
-                          {c.folio}
+                          {c.folio}{c.line ? ` · س${c.line}` : ""}
                         </button>
                         <div style={{ display: "flex", gap: 3 }}>
                           <button
@@ -1669,6 +1791,25 @@ ${sorted.length === 0
             initial={commentModal}
             onCancel={() => setCommentModal(null)}
             onSave={saveComment}
+          />
+        )}
+
+        {/* Snip selection overlay */}
+        {snipping && hasFile && (
+          <SnipOverlay
+            pageWrapRef={pageWrapRef}
+            onCancel={() => setSnipping(false)}
+            onFinish={performSnip}
+          />
+        )}
+
+        {/* Snip result preview */}
+        {snipResult && (
+          <SnipPreview
+            snip={snipResult}
+            onClose={() => setSnipResult(null)}
+            onSave={saveSnipToFile}
+            onCopy={copySnipToClipboard}
           />
         )}
 
@@ -1780,38 +1921,99 @@ function InfoEditorModal({ initial, onSave, onCancel }) {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onCancel]);
 
-  const inputStyle = { padding: "7px 10px", borderRadius: 6, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontFamily: "inherit", fontSize: 13, width: "100%" };
+  const inputStyle = { padding: "6px 9px", borderRadius: 6, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontFamily: "inherit", fontSize: 13, width: "100%" };
+  const setField = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
   return (
     <div className="mr-shortcuts-panel" onClick={onCancel} data-testid="mr-info-editor">
-      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640, maxHeight: "85vh", overflowY: "auto" }}>
         <h2 style={{ fontSize: 20 }}>بطاقة معلومات المخطوط</h2>
+
         <div className="mr-field">
-          <label>عنوان المخطوط</label>
-          <input ref={firstRef} type="text" value={f.title || ""} onChange={(e) => setF({ ...f, title: e.target.value })} style={inputStyle} data-testid="mr-info-field-title" />
+          <label>عنوان المخطوط <span style={{ color: "var(--amber)" }}>*</span></label>
+          <input ref={firstRef} type="text" value={f.title || ""} onChange={setField("title")} style={inputStyle} data-testid="mr-info-field-title" />
         </div>
+
+        <div className="mr-field">
+          <label>عناوين أخرى / عنوان بديل</label>
+          <input type="text" value={f.altTitle || ""} onChange={setField("altTitle")} style={inputStyle} data-testid="mr-info-field-altTitle" />
+        </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <div className="mr-field">
-            <label>الرقم / رقم النسخة</label>
-            <input type="text" value={f.number || ""} onChange={(e) => setF({ ...f, number: e.target.value })} style={inputStyle} data-testid="mr-info-field-number" />
+            <label>المؤلف</label>
+            <input type="text" value={f.author || ""} onChange={setField("author")} style={inputStyle} data-testid="mr-info-field-author" />
+          </div>
+          <div className="mr-field">
+            <label>الناسخ</label>
+            <input type="text" value={f.copyist || ""} onChange={setField("copyist")} style={inputStyle} data-testid="mr-info-field-copyist" />
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="mr-field">
+            <label>تاريخ النسخ (هجري/ميلادي)</label>
+            <input type="text" value={f.copyDate || ""} onChange={setField("copyDate")} placeholder="مثلاً: 823هـ / 1420م" style={inputStyle} data-testid="mr-info-field-copyDate" />
+          </div>
+          <div className="mr-field">
+            <label>العصر / القرن</label>
+            <input type="text" value={f.era || ""} onChange={setField("era")} placeholder="مثلاً: القرن 9 الهجري" style={inputStyle} data-testid="mr-info-field-era" />
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="mr-field">
+            <label>رقم النسخة</label>
+            <input type="text" value={f.number || ""} onChange={setField("number")} style={inputStyle} data-testid="mr-info-field-number" />
           </div>
           <div className="mr-field">
             <label>المكتبة</label>
-            <input type="text" value={f.library || ""} onChange={(e) => setF({ ...f, library: e.target.value })} style={inputStyle} data-testid="mr-info-field-library" />
+            <input type="text" value={f.library || ""} onChange={setField("library")} style={inputStyle} data-testid="mr-info-field-library" />
           </div>
         </div>
+
         <div className="mr-field">
-          <label>بيانات الفهرسة</label>
-          <input type="text" value={f.catalog || ""} onChange={(e) => setF({ ...f, catalog: e.target.value })} placeholder="مثلاً: مخطوط رقم كذا / ك 12345" style={inputStyle} data-testid="mr-info-field-catalog" />
+          <label>بيانات الفهرسة (رقم الفهرس / كولوفون)</label>
+          <input type="text" value={f.catalog || ""} onChange={setField("catalog")} style={inputStyle} data-testid="mr-info-field-catalog" />
         </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="mr-field">
+            <label>الموضوع / العلم</label>
+            <input type="text" value={f.subject || ""} onChange={setField("subject")} placeholder="فقه، نحو، حديث…" style={inputStyle} data-testid="mr-info-field-subject" />
+          </div>
+          <div className="mr-field">
+            <label>اللغة</label>
+            <input type="text" value={f.language || ""} onChange={setField("language")} style={inputStyle} data-testid="mr-info-field-language" />
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="mr-field">
+            <label>نوع الخط</label>
+            <input type="text" value={f.script || ""} onChange={setField("script")} placeholder="نسخ، مغربي، ثلث…" style={inputStyle} data-testid="mr-info-field-script" />
+          </div>
+          <div className="mr-field">
+            <label>عدد الأوراق</label>
+            <input type="text" value={f.foliosCount || ""} onChange={setField("foliosCount")} style={inputStyle} data-testid="mr-info-field-foliosCount" />
+          </div>
+        </div>
+
+        <div className="mr-field">
+          <label>الأبعاد / القياس</label>
+          <input type="text" value={f.dimensions || ""} onChange={setField("dimensions")} placeholder="مثلاً: 24 × 17 سم" style={inputStyle} data-testid="mr-info-field-dimensions" />
+        </div>
+
         <div className="mr-field">
           <label>رابط التحميل الأصلي</label>
-          <input type="url" value={f.downloadUrl || ""} onChange={(e) => setF({ ...f, downloadUrl: e.target.value })} placeholder="https://…" style={inputStyle} data-testid="mr-info-field-url" />
+          <input type="url" value={f.downloadUrl || ""} onChange={setField("downloadUrl")} placeholder="https://…" style={inputStyle} data-testid="mr-info-field-url" />
         </div>
+
         <div className="mr-field">
-          <label>ملاحظات فهرسة</label>
-          <textarea value={f.notes || ""} onChange={(e) => setF({ ...f, notes: e.target.value })} rows={3} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} data-testid="mr-info-field-notes" />
+          <label>ملاحظات فهرسة إضافية</label>
+          <textarea value={f.notes || ""} onChange={setField("notes")} rows={3} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} data-testid="mr-info-field-notes" />
         </div>
+
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
           <button className="mr-btn" onClick={onCancel} data-testid="mr-info-cancel">إلغاء</button>
           <button className="mr-btn mr-btn-primary" onClick={() => onSave(f)} data-testid="mr-info-save"><Save size={13} /> حفظ</button>
@@ -1843,7 +2045,7 @@ function CommentModal({ initial, onSave, onCancel }) {
         <h2 style={{ fontSize: 20 }}>
           {initial?.editingId ? "تعديل التعليق" : "إضافة تعليق"}
           <span style={{ fontSize: 13, color: "var(--amber)", marginInlineStart: 12, fontFamily: "inherit" }}>
-            العزو: {initial?.folio}
+            العزو: {initial?.folio}{initial?.line ? ` · سطر ${initial.line}` : ""}
           </span>
         </h2>
         <div className="mr-field">
@@ -1855,12 +2057,7 @@ function CommentModal({ initial, onSave, onCancel }) {
             rows={6}
             placeholder="اكتب تعليقك، اختلاف قراءة، ملاحظة تحقيق…"
             data-testid="mr-comment-input"
-            style={{
-              padding: "10px 12px", borderRadius: 6,
-              background: "var(--ink-3)", color: "var(--parchment)",
-              border: "1px solid var(--line)", fontFamily: "inherit",
-              fontSize: 14, width: "100%", resize: "vertical", lineHeight: 1.7
-            }}
+            style={{ padding: "10px 12px", borderRadius: 6, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontFamily: "inherit", fontSize: 14, width: "100%", resize: "vertical", lineHeight: 1.7 }}
           />
         </div>
         <div style={{ fontSize: 11, color: "var(--muted)", marginTop: -6 }}>
@@ -1870,6 +2067,180 @@ function CommentModal({ initial, onSave, onCancel }) {
           <button className="mr-btn" onClick={onCancel} data-testid="mr-comment-cancel">إلغاء</button>
           <button className="mr-btn mr-btn-primary" onClick={() => onSave(text)} data-testid="mr-comment-save">
             <Save size={13} /> {initial?.editingId ? "تعديل" : "حفظ"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SnipOverlay({ pageWrapRef, onCancel, onFinish }) {
+  const [dragStart, setDragStart] = React.useState(null);
+  const [rect, setRect] = React.useState(null);
+
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); onCancel(); } };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onCancel]);
+
+  const getPos = (e) => {
+    const wrap = pageWrapRef.current;
+    if (!wrap) return null;
+    const r = wrap.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top, wrap: r };
+  };
+
+  const onMouseDown = (e) => {
+    const p = getPos(e);
+    if (!p) return;
+    setDragStart(p);
+    setRect({ x: p.x, y: p.y, w: 0, h: 0 });
+    e.preventDefault();
+  };
+  const onMouseMove = (e) => {
+    if (!dragStart) return;
+    const p = getPos(e);
+    if (!p) return;
+    const x = Math.min(dragStart.x, p.x);
+    const y = Math.min(dragStart.y, p.y);
+    const w = Math.abs(p.x - dragStart.x);
+    const h = Math.abs(p.y - dragStart.y);
+    setRect({ x, y, w, h });
+  };
+  const onMouseUp = () => {
+    if (rect && rect.w > 8 && rect.h > 8) {
+      onFinish(rect);
+    } else {
+      onCancel();
+    }
+  };
+
+  const wrap = pageWrapRef.current;
+  const r = wrap ? wrap.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: 60, cursor: "crosshair" }}
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      data-testid="mr-snip-overlay"
+    >
+      <div style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.25)" }} />
+      {rect && wrap && (
+        <div style={{
+          position: "absolute",
+          left: r.left + rect.x, top: r.top + rect.y,
+          width: rect.w, height: rect.h,
+          border: "2px dashed var(--amber)",
+          background: "rgba(212,162,80,0.12)",
+          pointerEvents: "none",
+        }} />
+      )}
+      <div style={{ position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", background: "var(--ink-2)", border: "1px solid var(--amber)", padding: "6px 14px", borderRadius: 8, color: "var(--parchment)", fontSize: 13 }}>
+        اسحب لتحديد منطقة اللقطة · <span style={{ color: "var(--amber)" }}>Esc</span> لإلغاء
+      </div>
+    </div>
+  );
+}
+
+function SnipPreview({ snip, onClose, onSave, onCopy }) {
+  const canvasRef = React.useRef(null);
+  const [tool, setTool] = React.useState(null); // 'highlight' | null
+  const [painting, setPainting] = React.useState(false);
+
+  React.useEffect(() => {
+    const img = new Image();
+    img.onload = () => {
+      const c = canvasRef.current;
+      if (!c) return;
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+    };
+    img.src = snip.dataUrl;
+  }, [snip.dataUrl]);
+
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  const getPos = (e) => {
+    const c = canvasRef.current;
+    const r = c.getBoundingClientRect();
+    const sx = c.width / r.width;
+    const sy = c.height / r.height;
+    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
+  };
+
+  const onDown = (e) => {
+    if (tool !== "highlight") return;
+    setPainting(true);
+    paint(e);
+    e.preventDefault();
+  };
+  const onMove = (e) => painting && paint(e);
+  const onUp = () => setPainting(false);
+  const paint = (e) => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const p = getPos(e);
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "rgba(245, 200, 50, 0.35)";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 12, 0, 2 * Math.PI);
+    ctx.fill();
+  };
+
+  const exportDataUrl = () => canvasRef.current?.toDataURL("image/png") || snip.dataUrl;
+
+  return (
+    <div className="mr-shortcuts-panel" onClick={onClose} data-testid="mr-snip-preview">
+      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 900, width: "90%" }}>
+        <h2 style={{ fontSize: 18 }}>
+          معاينة اللقطة
+          <span style={{ fontSize: 13, color: "var(--amber)", marginInlineStart: 12, fontFamily: "inherit" }}>
+            {snip.folio} · سطر {snip.line}
+          </span>
+        </h2>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+          <button
+            className={`mr-btn ${tool === "highlight" ? "mr-btn-active" : ""}`}
+            onClick={() => setTool(tool === "highlight" ? null : "highlight")}
+            data-testid="mr-snip-tool-highlight"
+          >
+            <Highlighter size={14} /> إبراز أصفر
+          </button>
+          {tool && (
+            <span style={{ fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>
+              انقر واسحب على الصورة للتلوين
+            </span>
+          )}
+        </div>
+
+        <div style={{ background: "#0a0806", border: "1px solid var(--line)", borderRadius: 8, padding: 6, textAlign: "center", maxHeight: "55vh", overflow: "auto" }}>
+          <canvas
+            ref={canvasRef}
+            onMouseDown={onDown}
+            onMouseMove={onMove}
+            onMouseUp={onUp}
+            onMouseLeave={onUp}
+            style={{ maxWidth: "100%", cursor: tool === "highlight" ? "crosshair" : "default" }}
+          />
+        </div>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="mr-btn" onClick={onClose} data-testid="mr-snip-close">إغلاق</button>
+          <button className="mr-btn" onClick={() => onCopy(exportDataUrl())} data-testid="mr-snip-copy">
+            <Copy size={13} /> نسخ إلى الحافظة
+          </button>
+          <button className="mr-btn mr-btn-primary" onClick={() => onSave(exportDataUrl(), snip.filename)} data-testid="mr-snip-save">
+            <Download size={13} /> حفظ PNG
           </button>
         </div>
       </div>
@@ -1891,6 +2262,7 @@ const SHORTCUTS = [
   { desc: "إضافة علامة مرجعية", keys: ["Ctrl", "B"] },
   { desc: "فتح/إغلاق قائمة العلامات", keys: ["Ctrl", "G"] },
   { desc: "إضافة تعليق على السطر الحالي", keys: ["Ctrl", "M"] },
+  { desc: "التقاط لقطة من الصفحة", keys: ["Ctrl", "Shift", "S"] },
   { desc: "ملء الشاشة", keys: ["F11"] },
   { desc: "فتح/إغلاق نافذة الاختصارات", keys: ["؟"] },
   { desc: "إغلاق النوافذ", keys: ["Esc"] },
