@@ -215,6 +215,11 @@ export default function ManuscriptRuler() {
     }
   }, [pdfDoc, state.page, state.rotation, state.zoomIdx, state.fileType, renderPdfPage]);
 
+  // Scroll viewer to top whenever page changes
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [state.page]);
+
   // ---------------- Image rendering ----------------
   const onImgLoad = () => {
     const img = imgRef.current;
@@ -289,11 +294,11 @@ export default function ManuscriptRuler() {
     setState((s) => ({ ...s, rotation: (s.rotation + 90) % 360 }));
   const nextPage = () => {
     if (state.fileType !== "pdf") return;
-    setState((s) => ({ ...s, page: Math.min(pageCount, s.page + 1) }));
+    setState((s) => ({ ...s, page: Math.min(pageCount, s.page + 1), rulerY: 0 }));
   };
   const prevPage = () => {
     if (state.fileType !== "pdf") return;
-    setState((s) => ({ ...s, page: Math.max(1, s.page - 1) }));
+    setState((s) => ({ ...s, page: Math.max(1, s.page - 1), rulerY: 0 }));
   };
   const toggleRuler = () => setState((s) => ({ ...s, rulerVisible: !s.rulerVisible }));
 
