@@ -1,4 +1,5 @@
 from fastapi import FastAPI, APIRouter
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -41,6 +42,18 @@ class StatusCheckCreate(BaseModel):
 @api_router.get("/")
 async def root():
     return {"message": "Hello World"}
+
+
+@api_router.get("/download/windows")
+async def download_windows_app():
+    zip_path = Path("/app/desktop/dist/MusattaraDesktop-Windows-Portable.zip")
+    if not zip_path.exists():
+        return {"error": "build not available"}
+    return FileResponse(
+        path=str(zip_path),
+        filename="MusattaraDesktop-Windows-Portable.zip",
+        media_type="application/zip",
+    )
 
 @api_router.post("/status", response_model=StatusCheck)
 async def create_status_check(input: StatusCheckCreate):

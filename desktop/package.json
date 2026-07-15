@@ -1,0 +1,39 @@
+{
+  "name": "manuscript-ruler",
+  "productName": "MusattaraDesktop",
+  "version": "1.0.0",
+  "description": "مسطرة قراءة المخطوطات - أداة سطح مكتب لمعاونة الباحث",
+  "main": "main.js",
+  "author": "Emergent",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack:win": "electron-builder --win portable --x64 --publish=never"
+  },
+  "build": {
+    "appId": "com.emergent.manuscriptruler",
+    "productName": "MusattaraDesktop",
+    "asar": true,
+    "files": [
+      "main.js",
+      "app/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "artifactName": "MusattaraDesktop-${version}-portable.exe",
+      "signAndEditExecutable": false
+    },
+    "electronDownload": {
+      "cache": "/tmp/electron-cache"
+    }
+  },
+  "devDependencies": {
+    "electron": "33.2.0",
+    "electron-builder": "25.1.8"
+  }
+}

@@ -79,4 +79,11 @@ agenthub/agents/youtube/db
 memory/test_credentials.md
 
 # Mobile development
-android-sdk/
+android-sdk/desktop/dist/MusattaraDesktop/MusattaraDesktop.exe
+desktop/dist/MusattaraDesktop/MusattaraDesktop.exe
+desktop/dist/MusattaraDesktop-Windows-Portable.zip
+desktop/dist/MusattaraDesktop-Windows-Portable.zip
+desktop/dist/win-unpacked/MusattaraDesktop.exe
+desktop/dist/win-unpacked/MusattaraDesktop.exe
+desktop/node_modules/electron/dist/electron
+desktop/node_modules/electron/dist/electron
