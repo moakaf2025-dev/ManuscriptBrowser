@@ -87,3 +87,9 @@ desktop/dist/win-unpacked/MusattaraDesktop.exe
 desktop/dist/win-unpacked/MusattaraDesktop.exe
 desktop/node_modules/electron/dist/electron
 desktop/node_modules/electron/dist/electron
+.env
+.env.*
+*.env
+credentials.json
+*.key
+.credentials
