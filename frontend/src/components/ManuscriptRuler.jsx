@@ -22,6 +22,13 @@ import {
   Hash,
   Archive,
   FileText,
+  BookOpen,
+  MessageSquarePlus,
+  MessagesSquare,
+  Info,
+  Edit3,
+  Save,
+  ExternalLink,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
@@ -32,6 +39,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `${process.env.PUBLIC_URL || ""}/pdf.wo
 
 const STORAGE_KEY = "manuscriptRulerState.v1";
 const BOOKMARKS_KEY = "manuscriptRulerBookmarks.v1";
+const COMMENTS_KEY = "manuscriptRulerComments.v1";
+const INFO_KEY = "manuscriptRulerInfo.v1";
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
 const DEFAULT_STATE = {
@@ -94,6 +103,27 @@ function saveBookmarks(map) {
   localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(map));
 }
 
+function loadKV(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) || {} : {};
+  } catch {
+    return {};
+  }
+}
+function saveKV(key, data) {
+  localStorage.setItem(key, JSON.stringify(data));
+}
+
+const EMPTY_INFO = {
+  title: "",
+  number: "",
+  library: "",
+  catalog: "",
+  downloadUrl: "",
+  notes: "",
+};
+
 export default function ManuscriptRuler() {
   const [state, setState] = useState(loadState);
   const [baseDoc, setBaseDoc] = useState(null); // raw doc (pdf or images)
@@ -108,7 +138,13 @@ export default function ManuscriptRuler() {
   const [showFolioSettings, setShowFolioSettings] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [bookmarksMap, setBookmarksMap] = useState(loadBookmarks);
-  const [bookmarkModal, setBookmarkModal] = useState(null); // {label} when open
+  const [bookmarkModal, setBookmarkModal] = useState(null);
+  const [commentsMap, setCommentsMap] = useState(() => loadKV(COMMENTS_KEY));
+  const [infoMap, setInfoMap] = useState(() => loadKV(INFO_KEY));
+  const [showComments, setShowComments] = useState(false);
+  const [showInfoCard, setShowInfoCard] = useState(true);
+  const [showInfoEditor, setShowInfoEditor] = useState(false);
+  const [commentModal, setCommentModal] = useState(null); // {editingId?, page, folio, y, text}
   const [toast, setToast] = useState("");
   const [isFs, setIsFs] = useState(false);
 
@@ -121,6 +157,10 @@ export default function ManuscriptRuler() {
   const hasFileRef = useRef(false);
   const addBookmarkRef = useRef(() => {});
   const pageSizeRef = useRef({ w: 0, h: 0 });
+  const nextPageRef = useRef(() => {});
+  const prevPageRef = useRef(() => {});
+  const zoomInRef = useRef(() => {});
+  const zoomOutRef = useRef(() => {});
 
   useEffect(() => {
     stateRef.current = state;
@@ -138,6 +178,14 @@ export default function ManuscriptRuler() {
   useEffect(() => {
     saveBookmarks(bookmarksMap);
   }, [bookmarksMap]);
+
+  useEffect(() => {
+    saveKV(COMMENTS_KEY, commentsMap);
+  }, [commentsMap]);
+
+  useEffect(() => {
+    saveKV(INFO_KEY, infoMap);
+  }, [infoMap]);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -447,6 +495,151 @@ export default function ManuscriptRuler() {
     }));
   };
 
+  // ---------------- Manuscript info ----------------
+  const currentInfo = state.fileKey ? (infoMap[state.fileKey] || { ...EMPTY_INFO }) : { ...EMPTY_INFO };
+
+  const saveInfo = (newInfo) => {
+    if (!state.fileKey) return;
+    setInfoMap((m) => ({ ...m, [state.fileKey]: newInfo }));
+    setShowInfoEditor(false);
+    showToast("تم حفظ بيانات المخطوط");
+  };
+
+  // ---------------- Comments ----------------
+  const currentComments = state.fileKey ? (commentsMap[state.fileKey] || []) : [];
+
+  const openAddComment = () => {
+    if (!state.fileKey) return;
+    const folio = state.folioMode
+      ? formatFolio(state.page, { startFolio: state.folioStart, offset: state.folioOffset })
+      : `صفحة ${state.page}`;
+    setCommentModal({
+      editingId: null,
+      page: state.page,
+      folio,
+      y: state.rulerY,
+      text: "",
+    });
+  };
+
+  const openEditComment = (c) => {
+    setCommentModal({ editingId: c.id, page: c.page, folio: c.folio, y: c.y, text: c.text });
+  };
+
+  const saveComment = (text) => {
+    if (!commentModal || !state.fileKey) {
+      setCommentModal(null);
+      return;
+    }
+    const t = (text || "").trim();
+    if (!t) {
+      setCommentModal(null);
+      return;
+    }
+    setCommentsMap((m) => {
+      const list = m[state.fileKey] || [];
+      if (commentModal.editingId) {
+        return {
+          ...m,
+          [state.fileKey]: list.map((c) => (c.id === commentModal.editingId ? { ...c, text: t } : c)),
+        };
+      }
+      const newComment = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        page: commentModal.page,
+        folio: commentModal.folio,
+        y: commentModal.y,
+        text: t,
+        createdAt: new Date().toISOString(),
+      };
+      return { ...m, [state.fileKey]: [...list, newComment] };
+    });
+    setCommentModal(null);
+    showToast(commentModal.editingId ? "تم تعديل التعليق" : "أُضيف التعليق");
+  };
+
+  const deleteComment = (id) => {
+    setCommentsMap((m) => ({
+      ...m,
+      [state.fileKey]: (m[state.fileKey] || []).filter((c) => c.id !== id),
+    }));
+  };
+
+  const goToComment = (c) => {
+    setState((s) => ({ ...s, page: c.page, rulerY: c.y }));
+    setShowComments(false);
+  };
+
+  const exportCommentsAsWord = () => {
+    if (!currentComments.length && !hasInfoFilled(currentInfo)) {
+      showToast("لا توجد بيانات لتصديرها");
+      return;
+    }
+    const info = currentInfo;
+    const sorted = [...currentComments].sort((a, b) => a.page - b.page || a.y - b.y);
+    const rows = sorted
+      .map((c, i) => {
+        const dt = new Date(c.createdAt).toLocaleString("ar-EG");
+        const safeText = escapeHtml(c.text).replace(/\n/g, "<br>");
+        return `<tr><td>${i + 1}</td><td>${escapeHtml(c.folio)}</td><td>${safeText}</td><td>${dt}</td></tr>`;
+      })
+      .join("\n");
+
+    const html = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<title>تعليقات المخطوط - ${escapeHtml(info.title || state.fileName || "بدون عنوان")}</title>
+<style>
+  body { font-family: 'Traditional Arabic', 'Amiri', 'Noto Naskh Arabic', serif; font-size: 14pt; line-height: 1.8; padding: 30px; }
+  h1 { font-size: 22pt; border-bottom: 2px solid #333; padding-bottom: 10px; }
+  h2 { font-size: 16pt; margin-top: 24px; color: #444; border-bottom: 1px solid #999; padding-bottom: 6px; }
+  .info { border: 1px solid #ccc; padding: 12px 16px; background: #fafafa; margin-bottom: 20px; }
+  .info div { margin: 4px 0; }
+  .info b { display: inline-block; min-width: 140px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th, td { border: 1px solid #999; padding: 8px 10px; vertical-align: top; text-align: right; }
+  th { background: #eee; font-size: 12pt; }
+  td:first-child { text-align: center; width: 40px; }
+  td:nth-child(2) { text-align: center; width: 80px; font-weight: bold; color: #8b6a1c; }
+  td:last-child { width: 140px; font-size: 11pt; color: #666; }
+</style>
+</head>
+<body>
+<h1>تعليقات المخطوط</h1>
+<div class="info">
+  ${info.title ? `<div><b>عنوان المخطوط:</b> ${escapeHtml(info.title)}</div>` : ""}
+  ${info.number ? `<div><b>الرقم / رقم النسخة:</b> ${escapeHtml(info.number)}</div>` : ""}
+  ${info.library ? `<div><b>المكتبة:</b> ${escapeHtml(info.library)}</div>` : ""}
+  ${info.catalog ? `<div><b>الفهرسة:</b> ${escapeHtml(info.catalog)}</div>` : ""}
+  ${info.downloadUrl ? `<div><b>رابط التحميل:</b> <a href="${escapeHtml(info.downloadUrl)}">${escapeHtml(info.downloadUrl)}</a></div>` : ""}
+  ${info.notes ? `<div><b>ملاحظات فهرسة:</b> ${escapeHtml(info.notes).replace(/\n/g, "<br>")}</div>` : ""}
+  <div><b>الملف:</b> ${escapeHtml(state.fileName || "")}</div>
+  <div><b>تاريخ التصدير:</b> ${new Date().toLocaleString("ar-EG")}</div>
+  <div><b>عدد التعليقات:</b> ${sorted.length}</div>
+</div>
+${sorted.length === 0
+  ? "<p><i>لا توجد تعليقات مسجّلة لهذا المخطوط.</i></p>"
+  : `<h2>قائمة التعليقات</h2>
+     <table>
+       <thead><tr><th>#</th><th>العزو (الفوليو)</th><th>نص التعليق</th><th>تاريخ الإضافة</th></tr></thead>
+       <tbody>${rows}</tbody>
+     </table>`}
+</body></html>`;
+
+    const blob = new Blob(["\ufeff" + html], { type: "application/msword;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const base = (info.title || state.fileName || "manuscript").replace(/\.[^.]+$/, "").replace(/[/\\?%*:|"<>]/g, "-");
+    a.download = `${base}-تعليقات.doc`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showToast("تم تصدير التعليقات");
+  };
+
   const toggleFullscreen = async () => {
     if (!document.fullscreenElement) {
       await document.documentElement.requestFullscreen().catch(() => {});
@@ -485,6 +678,11 @@ export default function ManuscriptRuler() {
       if (e.ctrlKey && e.key.toLowerCase() === "g") {
         e.preventDefault();
         if (hasFileRef.current) setShowBookmarks((v) => !v);
+        return;
+      }
+      if (e.ctrlKey && e.key.toLowerCase() === "m") {
+        e.preventDefault();
+        if (hasFileRef.current) openAddComment();
         return;
       }
       if (e.ctrlKey && (e.key === "+" || e.key === "=")) {
@@ -548,15 +746,33 @@ export default function ManuscriptRuler() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.rulerStep, state.fileType, pageCount, showShortcuts]);
 
-  // Ctrl + wheel zoom
+  // Ctrl + wheel = zoom, plain wheel at edge = navigate pages
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    let lastNavAt = 0;
     const onWheel = (e) => {
       if (e.ctrlKey) {
         e.preventDefault();
         if (e.deltaY < 0) zoomIn();
         else zoomOut();
+        return;
+      }
+      // Plain wheel — try to scroll; if already at edge, navigate pages
+      if (!hasFileRef.current) return;
+      const atTop = el.scrollTop <= 0;
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+      const now = Date.now();
+      // debounce so scrolling doesn't jump 10 pages
+      if (now - lastNavAt < 350) return;
+      if (e.deltaY > 0 && atBottom) {
+        e.preventDefault();
+        lastNavAt = now;
+        nextPageRef.current();
+      } else if (e.deltaY < 0 && atTop) {
+        e.preventDefault();
+        lastNavAt = now;
+        prevPageRef.current();
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -584,6 +800,14 @@ export default function ManuscriptRuler() {
     addBookmarkRef.current = addBookmark;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.fileKey, state.page, state.rulerY]);
+
+  useEffect(() => {
+    nextPageRef.current = nextPage;
+    prevPageRef.current = prevPage;
+    zoomInRef.current = zoomIn;
+    zoomOutRef.current = zoomOut;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageCount, doc]);
 
   return (
     <div className={`mr-app ${isFs ? "mr-hide-chrome" : ""}`} data-testid="mr-app">
@@ -707,6 +931,39 @@ export default function ManuscriptRuler() {
           data-testid="mr-btn-export"
         >
           <Archive size={16} />
+        </button>
+
+        <button
+          className={`mr-btn mr-btn-icon ${showInfoCard ? "mr-btn-active" : ""}`}
+          onClick={() => setShowInfoCard((v) => !v)}
+          disabled={!hasFile}
+          title="بطاقة معلومات المخطوط"
+          data-testid="mr-btn-info"
+        >
+          <BookOpen size={16} />
+        </button>
+
+        <button
+          className="mr-btn mr-btn-icon"
+          onClick={openAddComment}
+          disabled={!hasFile}
+          title="إضافة تعليق (Ctrl+M)"
+          data-testid="mr-btn-add-comment"
+        >
+          <MessageSquarePlus size={16} />
+        </button>
+
+        <button
+          className="mr-btn mr-btn-icon"
+          onClick={() => setShowComments((v) => !v)}
+          disabled={!hasFile}
+          title="التعليقات وتصديرها"
+          data-testid="mr-btn-comments"
+        >
+          <MessagesSquare size={16} />
+          {currentComments.length > 0 && (
+            <span style={{ fontSize: 11, marginInlineStart: 2 }}>{currentComments.length}</span>
+          )}
         </button>
 
         <button
@@ -1240,6 +1497,181 @@ export default function ManuscriptRuler() {
           </div>
         )}
 
+        {/* Manuscript Info Card (floating, always-visible when file open) */}
+        {hasFile && showInfoCard && (
+          <div className="mr-info-card mr-fade" data-testid="mr-info-card">
+            <div className="mr-info-card-header">
+              <BookOpen size={14} />
+              <span className="mr-info-card-title" title={currentInfo.title || "بدون عنوان"} data-testid="mr-info-title">
+                {currentInfo.title || "— بدون عنوان —"}
+              </span>
+              <button
+                className="mr-btn mr-btn-icon"
+                onClick={() => setShowInfoEditor(true)}
+                title="تحرير البطاقة"
+                data-testid="mr-info-edit"
+                style={{ width: 22, height: 22 }}
+              >
+                <Edit3 size={12} />
+              </button>
+              <button
+                className="mr-btn mr-btn-icon"
+                onClick={() => setShowInfoCard(false)}
+                title="إخفاء البطاقة"
+                data-testid="mr-info-close"
+                style={{ width: 22, height: 22 }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+            <div className="mr-info-card-body">
+              {currentInfo.number && (
+                <div><span className="k">الرقم:</span> {currentInfo.number}</div>
+              )}
+              {currentInfo.library && (
+                <div><span className="k">المكتبة:</span> {currentInfo.library}</div>
+              )}
+              {currentInfo.catalog && (
+                <div><span className="k">الفهرسة:</span> {currentInfo.catalog}</div>
+              )}
+              {currentInfo.downloadUrl && (
+                <div>
+                  <span className="k">الرابط:</span>{" "}
+                  <a
+                    href={currentInfo.downloadUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: "var(--amber)" }}
+                  >
+                    <ExternalLink size={10} style={{ verticalAlign: "middle" }} /> فتح
+                  </a>
+                </div>
+              )}
+              {!hasInfoFilled(currentInfo) && (
+                <div style={{ color: "var(--muted)", fontStyle: "italic" }}>
+                  انقر <Edit3 size={10} style={{ verticalAlign: "middle" }} /> لتعبئة بيانات المخطوط.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Comments panel */}
+        {showComments && (
+          <div className="mr-settings mr-fade" data-testid="mr-comments-panel" style={{ inset: "auto 10px 10px auto", top: 60, width: 340 }}>
+            <h3>
+              التعليقات ({currentComments.length})
+              <button
+                className="mr-btn mr-btn-icon"
+                onClick={() => setShowComments(false)}
+                data-testid="mr-comments-close"
+                style={{ float: "left" }}
+              >
+                <X size={14} />
+              </button>
+            </h3>
+            <button
+              className="mr-btn mr-btn-primary"
+              onClick={openAddComment}
+              style={{ justifyContent: "center" }}
+              data-testid="mr-comments-add"
+            >
+              <MessageSquarePlus size={14} />
+              إضافة تعليق للموضع الحالي (Ctrl+M)
+            </button>
+
+            {currentComments.length === 0 && (
+              <p style={{ color: "var(--muted)", fontSize: 12, margin: "8px 0 0", lineHeight: 1.6 }}>
+                لا توجد تعليقات بعد. حرّك المسطرة إلى السطر الذي تريد التعليق عليه، ثم اضغط{" "}
+                <span className="mr-kbd">Ctrl + M</span>.
+              </p>
+            )}
+
+            {currentComments.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                {[...currentComments]
+                  .sort((a, b) => a.page - b.page || a.y - b.y)
+                  .map((c) => (
+                    <div
+                      key={c.id}
+                      style={{
+                        padding: "8px 10px",
+                        background: "var(--ink-3)",
+                        border: "1px solid var(--line)",
+                        borderRadius: 8,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 4,
+                      }}
+                      data-testid="mr-comment-item"
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+                        <button
+                          className="mr-btn"
+                          style={{ padding: "2px 8px", background: "var(--amber-2)", color: "var(--ink)", fontWeight: 600 }}
+                          onClick={() => goToComment(c)}
+                          title="اذهب إلى الموضع"
+                        >
+                          {c.folio}
+                        </button>
+                        <div style={{ display: "flex", gap: 3 }}>
+                          <button
+                            className="mr-btn mr-btn-icon"
+                            style={{ width: 22, height: 22 }}
+                            onClick={() => openEditComment(c)}
+                            title="تعديل"
+                          >
+                            <Edit3 size={11} />
+                          </button>
+                          <button
+                            className="mr-btn mr-btn-icon"
+                            style={{ width: 22, height: 22 }}
+                            onClick={() => deleteComment(c.id)}
+                            title="حذف"
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 13, color: "var(--parchment)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                        {c.text}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            <button
+              className="mr-btn"
+              onClick={exportCommentsAsWord}
+              style={{ justifyContent: "center", marginTop: 4 }}
+              disabled={currentComments.length === 0 && !hasInfoFilled(currentInfo)}
+              data-testid="mr-comments-export"
+            >
+              <FileText size={14} />
+              تصدير التعليقات + البطاقة (Word)
+            </button>
+          </div>
+        )}
+
+        {/* Info Editor Modal */}
+        {showInfoEditor && (
+          <InfoEditorModal
+            initial={currentInfo}
+            onCancel={() => setShowInfoEditor(false)}
+            onSave={saveInfo}
+          />
+        )}
+
+        {/* Comment Modal */}
+        {commentModal && (
+          <CommentModal
+            initial={commentModal}
+            onCancel={() => setCommentModal(null)}
+            onSave={saveComment}
+          />
+        )}
+
         {loading && <div className="mr-loading" data-testid="mr-loading">{loadingMsg}</div>}
         {toast && <div className="mr-toast" data-testid="mr-toast">{toast}</div>}
 
@@ -1253,6 +1685,19 @@ export default function ManuscriptRuler() {
       </div>
     </div>
   );
+}
+
+function escapeHtml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function hasInfoFilled(info) {
+  if (!info) return false;
+  return Boolean(info.title || info.number || info.library || info.catalog || info.downloadUrl || info.notes);
 }
 
 function pickRulerDefaults() {
@@ -1297,11 +1742,7 @@ function BookmarkModal({ initialLabel, onConfirm, onCancel }) {
 
   return (
     <div className="mr-shortcuts-panel" onClick={onCancel} data-testid="mr-bookmark-modal">
-      <div
-        className="mr-shortcuts-card mr-fade"
-        onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: 420 }}
-      >
+      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
         <h2 style={{ fontSize: 20 }}>إضافة علامة مرجعية</h2>
         <div className="mr-field">
           <label>عنوان العلامة (اختياري)</label>
@@ -1312,28 +1753,123 @@ function BookmarkModal({ initialLabel, onConfirm, onCancel }) {
             onChange={(e) => setLabel(e.target.value)}
             placeholder="مثلاً: بداية الفصل الأول"
             data-testid="mr-bookmark-input"
-            style={{
-              padding: "8px 10px",
-              borderRadius: 6,
-              background: "var(--ink-3)",
-              color: "var(--parchment)",
-              border: "1px solid var(--line)",
-              fontFamily: "inherit",
-              fontSize: 14,
-              width: "100%",
-            }}
+            style={{ padding: "8px 10px", borderRadius: 6, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontFamily: "inherit", fontSize: 14, width: "100%" }}
           />
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
-          <button className="mr-btn" onClick={onCancel} data-testid="mr-bookmark-cancel">
-            إلغاء
-          </button>
-          <button
-            className="mr-btn mr-btn-primary"
-            onClick={() => onConfirm(label)}
-            data-testid="mr-bookmark-confirm"
-          >
-            حفظ
+          <button className="mr-btn" onClick={onCancel} data-testid="mr-bookmark-cancel">إلغاء</button>
+          <button className="mr-btn mr-btn-primary" onClick={() => onConfirm(label)} data-testid="mr-bookmark-confirm">حفظ</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InfoEditorModal({ initial, onSave, onCancel }) {
+  const [f, setF] = React.useState({ ...(initial || {}) });
+  const firstRef = React.useRef(null);
+  React.useEffect(() => {
+    const t = setTimeout(() => firstRef.current?.focus(), 40);
+    return () => clearTimeout(t);
+  }, []);
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); onCancel(); }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onCancel]);
+
+  const inputStyle = { padding: "7px 10px", borderRadius: 6, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontFamily: "inherit", fontSize: 13, width: "100%" };
+
+  return (
+    <div className="mr-shortcuts-panel" onClick={onCancel} data-testid="mr-info-editor">
+      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+        <h2 style={{ fontSize: 20 }}>بطاقة معلومات المخطوط</h2>
+        <div className="mr-field">
+          <label>عنوان المخطوط</label>
+          <input ref={firstRef} type="text" value={f.title || ""} onChange={(e) => setF({ ...f, title: e.target.value })} style={inputStyle} data-testid="mr-info-field-title" />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="mr-field">
+            <label>الرقم / رقم النسخة</label>
+            <input type="text" value={f.number || ""} onChange={(e) => setF({ ...f, number: e.target.value })} style={inputStyle} data-testid="mr-info-field-number" />
+          </div>
+          <div className="mr-field">
+            <label>المكتبة</label>
+            <input type="text" value={f.library || ""} onChange={(e) => setF({ ...f, library: e.target.value })} style={inputStyle} data-testid="mr-info-field-library" />
+          </div>
+        </div>
+        <div className="mr-field">
+          <label>بيانات الفهرسة</label>
+          <input type="text" value={f.catalog || ""} onChange={(e) => setF({ ...f, catalog: e.target.value })} placeholder="مثلاً: مخطوط رقم كذا / ك 12345" style={inputStyle} data-testid="mr-info-field-catalog" />
+        </div>
+        <div className="mr-field">
+          <label>رابط التحميل الأصلي</label>
+          <input type="url" value={f.downloadUrl || ""} onChange={(e) => setF({ ...f, downloadUrl: e.target.value })} placeholder="https://…" style={inputStyle} data-testid="mr-info-field-url" />
+        </div>
+        <div className="mr-field">
+          <label>ملاحظات فهرسة</label>
+          <textarea value={f.notes || ""} onChange={(e) => setF({ ...f, notes: e.target.value })} rows={3} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} data-testid="mr-info-field-notes" />
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="mr-btn" onClick={onCancel} data-testid="mr-info-cancel">إلغاء</button>
+          <button className="mr-btn mr-btn-primary" onClick={() => onSave(f)} data-testid="mr-info-save"><Save size={13} /> حفظ</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CommentModal({ initial, onSave, onCancel }) {
+  const [text, setText] = React.useState(initial?.text || "");
+  const inputRef = React.useRef(null);
+  React.useEffect(() => {
+    const t = setTimeout(() => inputRef.current?.focus(), 40);
+    return () => clearTimeout(t);
+  }, []);
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); onCancel(); }
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.stopPropagation(); onSave(text); }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [text, onSave, onCancel]);
+
+  return (
+    <div className="mr-shortcuts-panel" onClick={onCancel} data-testid="mr-comment-modal">
+      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+        <h2 style={{ fontSize: 20 }}>
+          {initial?.editingId ? "تعديل التعليق" : "إضافة تعليق"}
+          <span style={{ fontSize: 13, color: "var(--amber)", marginInlineStart: 12, fontFamily: "inherit" }}>
+            العزو: {initial?.folio}
+          </span>
+        </h2>
+        <div className="mr-field">
+          <label>نص التعليق</label>
+          <textarea
+            ref={inputRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={6}
+            placeholder="اكتب تعليقك، اختلاف قراءة، ملاحظة تحقيق…"
+            data-testid="mr-comment-input"
+            style={{
+              padding: "10px 12px", borderRadius: 6,
+              background: "var(--ink-3)", color: "var(--parchment)",
+              border: "1px solid var(--line)", fontFamily: "inherit",
+              fontSize: 14, width: "100%", resize: "vertical", lineHeight: 1.7
+            }}
+          />
+        </div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: -6 }}>
+          <span className="mr-kbd">Ctrl + Enter</span> للحفظ · <span className="mr-kbd">Esc</span> للإلغاء
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="mr-btn" onClick={onCancel} data-testid="mr-comment-cancel">إلغاء</button>
+          <button className="mr-btn mr-btn-primary" onClick={() => onSave(text)} data-testid="mr-comment-save">
+            <Save size={13} /> {initial?.editingId ? "تعديل" : "حفظ"}
           </button>
         </div>
       </div>
@@ -1354,6 +1890,7 @@ const SHORTCUTS = [
   { desc: "إظهار/إخفاء المسطرة", keys: ["H"] },
   { desc: "إضافة علامة مرجعية", keys: ["Ctrl", "B"] },
   { desc: "فتح/إغلاق قائمة العلامات", keys: ["Ctrl", "G"] },
+  { desc: "إضافة تعليق على السطر الحالي", keys: ["Ctrl", "M"] },
   { desc: "ملء الشاشة", keys: ["F11"] },
   { desc: "فتح/إغلاق نافذة الاختصارات", keys: ["؟"] },
   { desc: "إغلاق النوافذ", keys: ["Esc"] },

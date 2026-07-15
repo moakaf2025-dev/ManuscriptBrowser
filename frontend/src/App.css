@@ -438,6 +438,64 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .mr-fade { animation: fadeIn 0.2s ease-out; }
 
+/* Manuscript Info Card (floating) */
+.mr-info-card {
+  position: absolute;
+  top: 8px;
+  inset-inline-start: 8px;
+  z-index: 15;
+  background: rgba(38, 32, 28, 0.95);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--amber);
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-width: 220px;
+  max-width: 340px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  font-size: 12px;
+}
+
+.mr-info-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--amber);
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--line);
+  margin-bottom: 6px;
+}
+
+.mr-info-card-title {
+  flex: 1;
+  color: var(--parchment);
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mr-info-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--parchment-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.mr-info-card-body .k {
+  color: var(--muted);
+  font-weight: 600;
+  margin-inline-end: 4px;
+}
+
+/* Compact mode adjustments */
+@media (max-width: 720px) {
+  .mr-info-card { min-width: 160px; max-width: 240px; padding: 6px 8px; font-size: 11px; }
+  .mr-info-card-title { font-size: 12px; }
+}
+
 /* Fullscreen: hide top bar toggle handled via body class */
 .mr-hide-chrome .mr-topbar { display: none; }
 
