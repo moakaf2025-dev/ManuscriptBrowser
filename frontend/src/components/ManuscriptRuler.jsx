@@ -17,6 +17,7 @@ import {
   BookmarkPlus,
   Trash2,
   SunMedium,
+  Download,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 
@@ -640,6 +641,17 @@ export default function ManuscriptRuler() {
               <FolderOpen size={16} />
               افتح ملف صورة أو PDF
             </button>
+            <a
+              href={`${process.env.REACT_APP_BACKEND_URL || ""}/api/download/windows`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mr-btn"
+              style={{ marginTop: 4 }}
+              data-testid="mr-download-windows"
+            >
+              <Download size={16} />
+              تنزيل نسخة ويندوز (سطح المكتب)
+            </a>
             <div className="mr-empty-hints">
               <span className="mr-kbd">↑ ↓ لتحريك المسطرة</span>
               <span className="mr-kbd">Page Up/Down للتنقل</span>
