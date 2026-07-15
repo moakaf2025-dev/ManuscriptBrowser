@@ -88,6 +88,7 @@ export default function ManuscriptRuler() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
   const [bookmarksMap, setBookmarksMap] = useState(loadBookmarks);
+  const [bookmarkModal, setBookmarkModal] = useState(null); // {label} when open
   const [toast, setToast] = useState("");
   const [isFs, setIsFs] = useState(false);
 
@@ -295,19 +296,33 @@ export default function ManuscriptRuler() {
 
   const addBookmark = () => {
     if (!state.fileKey) return;
-    const label = window.prompt("عنوان العلامة المرجعية (اختياري):", "");
-    if (label === null) return; // cancelled
-    const bm = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    // Open custom in-app modal (prompts are blocked in many iframe contexts)
+    const defaultLabel = `صفحة ${state.page}`;
+    setBookmarkModal({
+      label: defaultLabel,
       page: state.page,
       y: state.rulerY,
-      label: label.trim() || `صفحة ${state.page}`,
+    });
+  };
+
+  const confirmBookmark = (label) => {
+    if (!bookmarkModal || !state.fileKey) {
+      setBookmarkModal(null);
+      return;
+    }
+    const finalLabel = (label || "").trim() || `صفحة ${bookmarkModal.page}`;
+    const bm = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      page: bookmarkModal.page,
+      y: bookmarkModal.y,
+      label: finalLabel,
       createdAt: new Date().toISOString(),
     };
     setBookmarksMap((m) => ({
       ...m,
       [state.fileKey]: [...(m[state.fileKey] || []), bm],
     }));
+    setBookmarkModal(null);
     showToast("أُضيفت العلامة المرجعية");
   };
 
@@ -928,6 +943,14 @@ export default function ManuscriptRuler() {
 
         {loading && <div className="mr-loading" data-testid="mr-loading">جارٍ تحميل الصفحة…</div>}
         {toast && <div className="mr-toast" data-testid="mr-toast">{toast}</div>}
+
+        {bookmarkModal && (
+          <BookmarkModal
+            initialLabel={bookmarkModal.label}
+            onCancel={() => setBookmarkModal(null)}
+            onConfirm={confirmBookmark}
+          />
+        )}
       </div>
     </div>
   );
@@ -945,6 +968,78 @@ function pickRulerDefaults() {
     contrast: 100,
     invert: false,
   };
+}
+
+function BookmarkModal({ initialLabel, onConfirm, onCancel }) {
+  const [label, setLabel] = React.useState(initialLabel || "");
+  const inputRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const t = setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 30);
+    return () => clearTimeout(t);
+  }, []);
+
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onCancel();
+      } else if (e.key === "Enter") {
+        e.stopPropagation();
+        onConfirm(label);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [label, onConfirm, onCancel]);
+
+  return (
+    <div className="mr-shortcuts-panel" onClick={onCancel} data-testid="mr-bookmark-modal">
+      <div
+        className="mr-shortcuts-card mr-fade"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: 420 }}
+      >
+        <h2 style={{ fontSize: 20 }}>إضافة علامة مرجعية</h2>
+        <div className="mr-field">
+          <label>عنوان العلامة (اختياري)</label>
+          <input
+            ref={inputRef}
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="مثلاً: بداية الفصل الأول"
+            data-testid="mr-bookmark-input"
+            style={{
+              padding: "8px 10px",
+              borderRadius: 6,
+              background: "var(--ink-3)",
+              color: "var(--parchment)",
+              border: "1px solid var(--line)",
+              fontFamily: "inherit",
+              fontSize: 14,
+              width: "100%",
+            }}
+          />
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="mr-btn" onClick={onCancel} data-testid="mr-bookmark-cancel">
+            إلغاء
+          </button>
+          <button
+            className="mr-btn mr-btn-primary"
+            onClick={() => onConfirm(label)}
+            data-testid="mr-bookmark-confirm"
+          >
+            حفظ
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const SHORTCUTS = [
