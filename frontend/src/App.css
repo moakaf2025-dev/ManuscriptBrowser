@@ -102,6 +102,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .mr-btn:hover:not(:disabled) { background: #3d332c; border-color: var(--line); }
 .mr-btn:active:not(:disabled) { transform: translateY(1px); }
+.mr-btn-active { background: rgba(212, 162, 80, 0.18); border-color: var(--amber); color: var(--amber); }
 
 .mr-btn-primary {
   background: linear-gradient(135deg, var(--amber), var(--amber-2));
