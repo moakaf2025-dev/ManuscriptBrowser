@@ -13,16 +13,22 @@ import {
   ChevronLeft,
   Keyboard,
   X,
+  Bookmark,
+  BookmarkPlus,
+  Trash2,
+  SunMedium,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `${process.env.PUBLIC_URL || ""}/pdf.worker.min.mjs`;
 
 const STORAGE_KEY = "manuscriptRulerState.v1";
+const BOOKMARKS_KEY = "manuscriptRulerBookmarks.v1";
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
 const DEFAULT_STATE = {
   fileName: "",
+  fileKey: "",
   fileType: "", // 'image' | 'pdf'
   page: 1,
   zoomIdx: 2,
@@ -35,6 +41,9 @@ const DEFAULT_STATE = {
   rulerVisible: true,
   dimAlpha: 0.28,
   dimEnabled: true,
+  brightness: 100,
+  contrast: 100,
+  invert: false,
 };
 
 function loadState() {
@@ -50,9 +59,22 @@ function loadState() {
 
 function saveState(state) {
   const toSave = { ...state };
-  // never persist blob object, only lightweight metadata
   delete toSave.__pdfDoc;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+}
+
+function loadBookmarks() {
+  try {
+    const raw = localStorage.getItem(BOOKMARKS_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveBookmarks(map) {
+  localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(map));
 }
 
 export default function ManuscriptRuler() {
@@ -60,10 +82,12 @@ export default function ManuscriptRuler() {
   const [pdfDoc, setPdfDoc] = useState(null);
   const [imageUrl, setImageUrl] = useState("");
   const [pageCount, setPageCount] = useState(0);
-  const [pageSize, setPageSize] = useState({ w: 0, h: 0 }); // rendered size (px)
+  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
   const [loading, setLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showBookmarks, setShowBookmarks] = useState(false);
+  const [bookmarksMap, setBookmarksMap] = useState(loadBookmarks);
   const [toast, setToast] = useState("");
   const [isFs, setIsFs] = useState(false);
 
@@ -73,11 +97,22 @@ export default function ManuscriptRuler() {
   const scrollRef = useRef(null);
   const fileInputRef = useRef(null);
   const rulerDragRef = useRef({ dragging: false, offsetY: 0 });
+  const stateRef = useRef(state);
+  const hasFileRef = useRef(false);
+  const addBookmarkRef = useRef(() => {});
 
-  // Persist state
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  // Persist state & bookmarks
   useEffect(() => {
     saveState(state);
   }, [state]);
+
+  useEffect(() => {
+    saveBookmarks(bookmarksMap);
+  }, [bookmarksMap]);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -95,6 +130,7 @@ export default function ManuscriptRuler() {
     const name = file.name.toLowerCase();
     setLoading(true);
     try {
+      const fileKey = `${file.name}|${file.size}|${file.lastModified || 0}`;
       if (name.endsWith(".pdf")) {
         const buffer = await file.arrayBuffer();
         const doc = await pdfjsLib.getDocument({ data: buffer }).promise;
@@ -104,6 +140,7 @@ export default function ManuscriptRuler() {
         setState((s) => ({
           ...s,
           fileName: file.name,
+          fileKey,
           fileType: "pdf",
           page: 1,
         }));
@@ -115,6 +152,7 @@ export default function ManuscriptRuler() {
         setState((s) => ({
           ...s,
           fileName: file.name,
+          fileKey,
           fileType: "image",
           page: 1,
         }));
@@ -252,6 +290,39 @@ export default function ManuscriptRuler() {
   };
   const toggleRuler = () => setState((s) => ({ ...s, rulerVisible: !s.rulerVisible }));
 
+  // ---------------- Bookmarks ----------------
+  const currentBookmarks = state.fileKey ? (bookmarksMap[state.fileKey] || []) : [];
+
+  const addBookmark = () => {
+    if (!state.fileKey) return;
+    const label = window.prompt("عنوان العلامة المرجعية (اختياري):", "");
+    if (label === null) return; // cancelled
+    const bm = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      page: state.page,
+      y: state.rulerY,
+      label: label.trim() || `صفحة ${state.page}`,
+      createdAt: new Date().toISOString(),
+    };
+    setBookmarksMap((m) => ({
+      ...m,
+      [state.fileKey]: [...(m[state.fileKey] || []), bm],
+    }));
+    showToast("أُضيفت العلامة المرجعية");
+  };
+
+  const goToBookmark = (bm) => {
+    setState((s) => ({ ...s, page: bm.page, rulerY: bm.y }));
+    setShowBookmarks(false);
+  };
+
+  const deleteBookmark = (id) => {
+    setBookmarksMap((m) => ({
+      ...m,
+      [state.fileKey]: (m[state.fileKey] || []).filter((b) => b.id !== id),
+    }));
+  };
+
   const toggleFullscreen = async () => {
     if (!document.fullscreenElement) {
       await document.documentElement.requestFullscreen().catch(() => {});
@@ -280,6 +351,16 @@ export default function ManuscriptRuler() {
       if (e.ctrlKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
         openFile();
+        return;
+      }
+      if (e.ctrlKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        if (hasFileRef.current) addBookmarkRef.current();
+        return;
+      }
+      if (e.ctrlKey && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        if (hasFileRef.current) setShowBookmarks((v) => !v);
         return;
       }
       if (e.ctrlKey && (e.key === "+" || e.key === "=")) {
@@ -365,6 +446,15 @@ export default function ManuscriptRuler() {
 
   const hasFile = Boolean(pdfDoc || imageUrl);
 
+  useEffect(() => {
+    hasFileRef.current = hasFile;
+  }, [hasFile]);
+
+  useEffect(() => {
+    addBookmarkRef.current = addBookmark;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.fileKey, state.page, state.rulerY]);
+
   return (
     <div className={`mr-app ${isFs ? "mr-hide-chrome" : ""}`} data-testid="mr-app">
       <input
@@ -434,6 +524,29 @@ export default function ManuscriptRuler() {
           data-testid="mr-btn-settings"
         >
           <Settings size={16} />
+        </button>
+
+        <button
+          className="mr-btn mr-btn-icon"
+          onClick={() => hasFile && addBookmark()}
+          disabled={!hasFile}
+          title="إضافة علامة مرجعية (Ctrl+B)"
+          data-testid="mr-btn-add-bookmark"
+        >
+          <BookmarkPlus size={16} />
+        </button>
+
+        <button
+          className="mr-btn mr-btn-icon"
+          onClick={() => setShowBookmarks((v) => !v)}
+          disabled={!hasFile}
+          title="قائمة العلامات المرجعية (Ctrl+G)"
+          data-testid="mr-btn-bookmarks"
+        >
+          <Bookmark size={16} />
+          {currentBookmarks.length > 0 && (
+            <span style={{ fontSize: 11, marginInlineStart: 2 }}>{currentBookmarks.length}</span>
+          )}
         </button>
 
         <button
@@ -520,22 +633,31 @@ export default function ManuscriptRuler() {
               style={{ width: pageSize.w || undefined, height: pageSize.h || undefined }}
               data-testid="mr-page-wrap"
             >
-              {state.fileType === "pdf" && <canvas ref={canvasRef} className="mr-page-canvas" />}
-              {state.fileType === "image" && (
-                <img
-                  ref={imgRef}
-                  src={imageUrl}
-                  onLoad={onImgLoad}
-                  alt="manuscript"
-                  className="mr-page-img"
-                  style={{
-                    width: pageSize.w || "auto",
-                    height: pageSize.h || "auto",
-                    transform: `rotate(${state.rotation}deg)`,
-                    transformOrigin: "center center",
-                  }}
-                />
-              )}
+              <div
+                className="mr-page-filter"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  filter: `brightness(${state.brightness}%) contrast(${state.contrast}%) ${state.invert ? "invert(1) hue-rotate(180deg)" : ""}`,
+                }}
+              >
+                {state.fileType === "pdf" && <canvas ref={canvasRef} className="mr-page-canvas" />}
+                {state.fileType === "image" && (
+                  <img
+                    ref={imgRef}
+                    src={imageUrl}
+                    onLoad={onImgLoad}
+                    alt="manuscript"
+                    className="mr-page-img"
+                    style={{
+                      width: pageSize.w || "auto",
+                      height: pageSize.h || "auto",
+                      transform: `rotate(${state.rotation}deg)`,
+                      transformOrigin: "center center",
+                    }}
+                  />
+                )}
+              </div>
 
               {/* Dim overlays above & below ruler */}
               {state.rulerVisible && state.dimEnabled && pageSize.h > 0 && (
@@ -665,6 +787,49 @@ export default function ManuscriptRuler() {
               />
             </div>
 
+            <div className="mr-field">
+              <label>
+                السطوع <span className="val">{state.brightness}%</span>
+              </label>
+              <input
+                type="range"
+                min="50"
+                max="200"
+                value={state.brightness}
+                onChange={(e) => setState((s) => ({ ...s, brightness: Number(e.target.value) }))}
+                data-testid="mr-set-brightness"
+              />
+            </div>
+
+            <div className="mr-field">
+              <label>
+                التباين <span className="val">{state.contrast}%</span>
+              </label>
+              <input
+                type="range"
+                min="50"
+                max="250"
+                value={state.contrast}
+                onChange={(e) => setState((s) => ({ ...s, contrast: Number(e.target.value) }))}
+                data-testid="mr-set-contrast"
+              />
+            </div>
+
+            <div className="mr-field">
+              <label style={{ cursor: "pointer" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <SunMedium size={14} /> عكس الألوان (للمخطوطات الباهتة)
+                </span>
+                <input
+                  type="checkbox"
+                  checked={state.invert}
+                  onChange={(e) => setState((s) => ({ ...s, invert: e.target.checked }))}
+                  data-testid="mr-set-invert"
+                  style={{ accentColor: "var(--amber)" }}
+                />
+              </label>
+            </div>
+
             <button
               className="mr-btn"
               onClick={() => setState((s) => ({ ...s, ...pickRulerDefaults() }))}
@@ -672,6 +837,59 @@ export default function ManuscriptRuler() {
             >
               إعادة الافتراضي
             </button>
+          </div>
+        )}
+
+        {showBookmarks && (
+          <div className="mr-settings mr-fade" data-testid="mr-bookmarks" style={{ inset: "auto 10px 10px auto", top: 60 }}>
+            <h3>العلامات المرجعية</h3>
+            {currentBookmarks.length === 0 && (
+              <p style={{ color: "var(--muted)", fontSize: 13, margin: 0 }}>
+                لا توجد علامات بعد. اضغط <span className="mr-kbd">Ctrl + B</span> لإضافة علامة عند موضع المسطرة الحالي.
+              </p>
+            )}
+            {currentBookmarks.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                {currentBookmarks.map((bm) => (
+                  <div
+                    key={bm.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "8px 10px",
+                      background: "var(--ink-3)",
+                      border: "1px solid var(--line)",
+                      borderRadius: 8,
+                    }}
+                    data-testid="mr-bookmark-item"
+                  >
+                    <button
+                      className="mr-btn"
+                      style={{ flex: 1, justifyContent: "flex-start", padding: "4px 8px" }}
+                      onClick={() => goToBookmark(bm)}
+                      data-testid="mr-bookmark-go"
+                    >
+                      <Bookmark size={13} />
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+                        <span style={{ fontSize: 13 }}>{bm.label}</span>
+                        <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                          صفحة {bm.page} · Y {Math.round(bm.y)}
+                        </span>
+                      </div>
+                    </button>
+                    <button
+                      className="mr-btn mr-btn-icon"
+                      onClick={() => deleteBookmark(bm.id)}
+                      title="حذف"
+                      data-testid="mr-bookmark-delete"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -723,6 +941,9 @@ function pickRulerDefaults() {
     rulerOpacity: DEFAULT_STATE.rulerOpacity,
     dimAlpha: DEFAULT_STATE.dimAlpha,
     dimEnabled: true,
+    brightness: 100,
+    contrast: 100,
+    invert: false,
   };
 }
 
@@ -737,6 +958,8 @@ const SHORTCUTS = [
   { desc: "تكبير/تصغير بعجلة الفأرة", keys: ["Ctrl", "عجلة"] },
   { desc: "تدوير 90°", keys: ["R"] },
   { desc: "إظهار/إخفاء المسطرة", keys: ["H"] },
+  { desc: "إضافة علامة مرجعية", keys: ["Ctrl", "B"] },
+  { desc: "فتح/إغلاق قائمة العلامات", keys: ["Ctrl", "G"] },
   { desc: "ملء الشاشة", keys: ["F11"] },
   { desc: "فتح/إغلاق نافذة الاختصارات", keys: ["؟"] },
   { desc: "إغلاق النوافذ", keys: ["Esc"] },
