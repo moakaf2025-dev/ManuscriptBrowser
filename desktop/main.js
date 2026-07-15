@@ -9,6 +9,7 @@ function createWindow() {
     minHeight: 400,
     backgroundColor: "#1a1613",
     autoHideMenuBar: true,
+    title: "متصفح المخطوطات",
     icon: path.join(__dirname, "icon.png"),
     webPreferences: {
       contextIsolation: true,

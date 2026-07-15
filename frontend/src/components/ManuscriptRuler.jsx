@@ -32,6 +32,11 @@ import {
   Scissors,
   Copy,
   Highlighter,
+  Square,
+  ArrowUpRight,
+  Type,
+  Pencil,
+  RotateCcw,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
@@ -917,11 +922,11 @@ ${sorted.length === 0
       <div className="mr-topbar" data-testid="mr-topbar">
         <div className="mr-brand">
           <div className="mr-brand-mark">م</div>
-          <div className="mr-brand-name">مسطرة المخطوطات</div>
+          <div className="mr-brand-name">متصفح المخطوطات</div>
         </div>
 
         <button className="mr-btn mr-btn-primary" onClick={openFile} data-testid="mr-btn-open">
-          <FolderOpen size={16} />
+          <FolderOpen size={18} />
           فتح ملف
         </button>
 
@@ -932,7 +937,7 @@ ${sorted.length === 0
           title="تصغير (Ctrl -)"
           data-testid="mr-btn-zoom-out"
         >
-          <ZoomOut size={16} />
+          <ZoomOut size={18} />
         </button>
         <span className="mr-info-chip" data-testid="mr-zoom-label">{Math.round(scale * 100)}%</span>
         <button
@@ -942,7 +947,7 @@ ${sorted.length === 0
           title="تكبير (Ctrl +)"
           data-testid="mr-btn-zoom-in"
         >
-          <ZoomIn size={16} />
+          <ZoomIn size={18} />
         </button>
 
         <button
@@ -952,7 +957,7 @@ ${sorted.length === 0
           title="تدوير (R)"
           data-testid="mr-btn-rotate"
         >
-          <RotateCw size={16} />
+          <RotateCw size={18} />
         </button>
 
         <button
@@ -962,7 +967,7 @@ ${sorted.length === 0
           title="إظهار/إخفاء المسطرة (H)"
           data-testid="mr-btn-toggle-ruler"
         >
-          {state.rulerVisible ? <Eye size={16} /> : <EyeOff size={16} />}
+          {state.rulerVisible ? <Eye size={18} /> : <EyeOff size={18} />}
         </button>
 
         <button
@@ -971,7 +976,7 @@ ${sorted.length === 0
           title="إعدادات المسطرة"
           data-testid="mr-btn-settings"
         >
-          <Settings size={16} />
+          <Settings size={18} />
         </button>
 
         <button
@@ -981,7 +986,7 @@ ${sorted.length === 0
           title="إضافة علامة مرجعية (Ctrl+B)"
           data-testid="mr-btn-add-bookmark"
         >
-          <BookmarkPlus size={16} />
+          <BookmarkPlus size={18} />
         </button>
 
         <button
@@ -991,7 +996,7 @@ ${sorted.length === 0
           title="قائمة العلامات المرجعية (Ctrl+G)"
           data-testid="mr-btn-bookmarks"
         >
-          <Bookmark size={16} />
+          <Bookmark size={18} />
           {currentBookmarks.length > 0 && (
             <span style={{ fontSize: 11, marginInlineStart: 2 }}>{currentBookmarks.length}</span>
           )}
@@ -1004,7 +1009,7 @@ ${sorted.length === 0
           title="تقسيم الصفحة المزدوجة (كشف تلقائي للطي)"
           data-testid="mr-btn-split"
         >
-          <SplitSquareHorizontal size={16} />
+          <SplitSquareHorizontal size={18} />
         </button>
 
         <button
@@ -1014,7 +1019,7 @@ ${sorted.length === 0
           title="ترقيم المخطوطات (a/b)"
           data-testid="mr-btn-folio"
         >
-          <Hash size={16} />
+          <Hash size={18} />
         </button>
 
         <button
@@ -1024,7 +1029,7 @@ ${sorted.length === 0
           title="تصدير / تصغير الصور"
           data-testid="mr-btn-export"
         >
-          <Archive size={16} />
+          <Archive size={18} />
         </button>
 
         <button
@@ -1034,7 +1039,7 @@ ${sorted.length === 0
           title="بطاقة معلومات المخطوط"
           data-testid="mr-btn-info"
         >
-          <BookOpen size={16} />
+          <BookOpen size={18} />
         </button>
 
         <button
@@ -1044,7 +1049,7 @@ ${sorted.length === 0
           title="إضافة تعليق (Ctrl+M)"
           data-testid="mr-btn-add-comment"
         >
-          <MessageSquarePlus size={16} />
+          <MessageSquarePlus size={18} />
         </button>
 
         <button
@@ -1054,7 +1059,7 @@ ${sorted.length === 0
           title="التعليقات وتصديرها"
           data-testid="mr-btn-comments"
         >
-          <MessagesSquare size={16} />
+          <MessagesSquare size={18} />
           {currentComments.length > 0 && (
             <span style={{ fontSize: 11, marginInlineStart: 2 }}>{currentComments.length}</span>
           )}
@@ -1067,16 +1072,7 @@ ${sorted.length === 0
           title="التقاط لقطة (Ctrl+Shift+S)"
           data-testid="mr-btn-snip"
         >
-          <Scissors size={16} />
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={() => setShowShortcuts(true)}
-          title="اختصارات لوحة المفاتيح (؟)"
-          data-testid="mr-btn-shortcuts"
-        >
-          <Keyboard size={16} />
+          <Scissors size={18} />
         </button>
 
         <button
@@ -1085,7 +1081,7 @@ ${sorted.length === 0
           title="ملء الشاشة (F11)"
           data-testid="mr-btn-fullscreen"
         >
-          {isFs ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          {isFs ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
         </button>
 
         <div className="mr-info">
@@ -1098,7 +1094,7 @@ ${sorted.length === 0
                 title="الصفحة السابقة (Page Up)"
                 data-testid="mr-btn-prev"
               >
-                <ChevronRight size={16} />
+                <ChevronRight size={18} />
               </button>
               <span className="mr-info-chip" data-testid="mr-page-label">
                 {state.folioMode
@@ -1117,7 +1113,7 @@ ${sorted.length === 0
                 title="الصفحة التالية (Page Down)"
                 data-testid="mr-btn-next"
               >
-                <ChevronLeft size={16} />
+                <ChevronLeft size={18} />
               </button>
             </>
           )}
@@ -1133,32 +1129,19 @@ ${sorted.length === 0
         {!hasFile && (
           <div className="mr-empty mr-fade">
             <div className="mr-empty-mark">م</div>
-            <h1>مسطرة قراءة المخطوطات</h1>
+            <h1>متصفح المخطوطات</h1>
             <p>
-              أداة بسيطة لعرض صور المخطوطات وملفات PDF أو أرشيفات (ZIP / RAR / 7z) مع مسطرة أفقية شفافة تُحرَّك يدوياً
-              سطراً سطراً، لتوجيه النظر وتقليل التشتت أثناء المقابلة والقراءة.
+              متصفح مخطوطات مساعد للباحثين على تحميل المخطوطات المضغوطة وتصفحها
+              وتقسيم صفحاتها وترقيمها وتصغير حجمها ومقابلتها والتعليق عليها وفهرستها.
             </p>
-            <button className="mr-btn mr-btn-primary" onClick={openFile} data-testid="mr-empty-open">
-              <FolderOpen size={16} />
-              افتح ملف (PDF / صورة / ZIP / RAR / 7z)
+            <button className="mr-btn mr-btn-primary mr-empty-btn" onClick={openFile} data-testid="mr-empty-open">
+              <FolderOpen size={20} />
+              افتح ملف مخطوط
             </button>
-            <a
-              href={`${process.env.REACT_APP_BACKEND_URL || ""}/api/download/windows`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mr-btn"
-              style={{ marginTop: 4 }}
-              data-testid="mr-download-windows"
-            >
-              <Download size={16} />
-              تنزيل نسخة ويندوز (سطح المكتب)
-            </a>
-            <div className="mr-empty-hints">
-              <span className="mr-kbd">↑ ↓ لتحريك المسطرة</span>
-              <span className="mr-kbd">Page Up/Down للتنقل</span>
-              <span className="mr-kbd">Ctrl + / − للتكبير</span>
-              <span className="mr-kbd">H لإخفاء المسطرة</span>
-              <span className="mr-kbd">؟ للاختصارات</span>
+            <div className="mr-credits" data-testid="mr-credits">
+              فكرة وتصميم: <b>د. محمد عمر أحمد الكاف</b> — اختصاصي مخطوطات
+              <br />
+              <a href="mailto:moakaf2025@gmail.com">moakaf2025@gmail.com</a>
             </div>
           </div>
         )}
@@ -1431,7 +1414,7 @@ ${sorted.length === 0
                   onClick={() => setShowShortcuts(false)}
                   data-testid="mr-shortcuts-close"
                 >
-                  <X size={16} />
+                  <X size={18} />
                 </button>
               </h2>
               <div className="mr-shortcuts-list">
@@ -2147,27 +2130,66 @@ function SnipOverlay({ pageWrapRef, onCancel, onFinish }) {
 
 function SnipPreview({ snip, onClose, onSave, onCopy }) {
   const canvasRef = React.useRef(null);
-  const [tool, setTool] = React.useState(null); // 'highlight' | null
-  const [painting, setPainting] = React.useState(false);
+  const baseImgRef = React.useRef(null);
+  const [tool, setTool] = React.useState(null); // 'highlight' | 'rect' | 'arrow' | 'text' | 'freehand'
+  const [color, setColor] = React.useState("#e63946"); // default red
+  const [opacity, setOpacity] = React.useState(0.55);
+  const [strokeWidth, setStrokeWidth] = React.useState(4);
+  const [fontSize, setFontSize] = React.useState(22);
+  const [history, setHistory] = React.useState([]); // canvas snapshots
+  const startRef = React.useRef(null);
+  const prevSnapshotRef = React.useRef(null);
 
+  // Load base image once
   React.useEffect(() => {
     const img = new Image();
     img.onload = () => {
+      baseImgRef.current = img;
       const c = canvasRef.current;
       if (!c) return;
       c.width = img.naturalWidth;
       c.height = img.naturalHeight;
       const ctx = c.getContext("2d");
       ctx.drawImage(img, 0, 0);
+      // seed history
+      setHistory([c.toDataURL("image/png")]);
     };
     img.src = snip.dataUrl;
   }, [snip.dataUrl]);
 
   React.useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.stopPropagation();
+        undo();
+      }
+    };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose, history]);
+
+  const pushHistory = () => {
+    const c = canvasRef.current;
+    if (!c) return;
+    setHistory((h) => [...h.slice(-15), c.toDataURL("image/png")]);
+  };
+
+  const undo = () => {
+    if (history.length <= 1) return;
+    const prev = history[history.length - 2];
+    const c = canvasRef.current;
+    if (!c) return;
+    const img = new Image();
+    img.onload = () => {
+      const ctx = c.getContext("2d");
+      ctx.clearRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0);
+      setHistory((h) => h.slice(0, -1));
+    };
+    img.src = prev;
+  };
 
   const getPos = (e) => {
     const c = canvasRef.current;
@@ -2177,60 +2199,197 @@ function SnipPreview({ snip, onClose, onSave, onCopy }) {
     return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
   };
 
-  const onDown = (e) => {
-    if (tool !== "highlight") return;
-    setPainting(true);
-    paint(e);
-    e.preventDefault();
+  const hexToRgba = (hex, alpha) => {
+    const h = hex.replace("#", "");
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
   };
-  const onMove = (e) => painting && paint(e);
-  const onUp = () => setPainting(false);
-  const paint = (e) => {
+
+  const captureSnapshot = () => {
+    const c = canvasRef.current;
+    if (!c) return null;
+    return c.getContext("2d").getImageData(0, 0, c.width, c.height);
+  };
+
+  const restoreSnapshot = (snap) => {
+    if (!snap) return;
+    const c = canvasRef.current;
+    if (!c) return;
+    c.getContext("2d").putImageData(snap, 0, 0);
+  };
+
+  const drawArrow = (ctx, x1, y1, x2, y2, col, width) => {
+    ctx.strokeStyle = col;
+    ctx.fillStyle = col;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    const angle = Math.atan2(y2 - y1, x2 - x1);
+    const head = Math.max(12, width * 3.5);
+    ctx.beginPath();
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(x2 - head * Math.cos(angle - Math.PI / 7), y2 - head * Math.sin(angle - Math.PI / 7));
+    ctx.lineTo(x2 - head * Math.cos(angle + Math.PI / 7), y2 - head * Math.sin(angle + Math.PI / 7));
+    ctx.closePath();
+    ctx.fill();
+  };
+
+  const onDown = (e) => {
+    if (!tool) return;
     const c = canvasRef.current;
     if (!c) return;
     const p = getPos(e);
+    startRef.current = p;
+    prevSnapshotRef.current = captureSnapshot();
     const ctx = c.getContext("2d");
-    ctx.fillStyle = "rgba(245, 200, 50, 0.35)";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 12, 0, 2 * Math.PI);
-    ctx.fill();
+
+    if (tool === "highlight" || tool === "freehand") {
+      ctx.strokeStyle = tool === "highlight" ? hexToRgba(color, opacity) : hexToRgba(color, opacity);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = tool === "highlight" ? strokeWidth * 4 : strokeWidth;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+    } else if (tool === "text") {
+      const text = window.prompt("اكتب النص:", "");
+      startRef.current = null;
+      if (!text) { prevSnapshotRef.current = null; return; }
+      ctx.fillStyle = hexToRgba(color, Math.max(opacity, 0.9));
+      ctx.font = `bold ${fontSize}px 'Noto Naskh Arabic','Amiri', serif`;
+      ctx.textBaseline = "top";
+      // background box for readability
+      const metrics = ctx.measureText(text);
+      const pad = 6;
+      const bh = fontSize + pad * 2;
+      const bw = metrics.width + pad * 2;
+      ctx.save();
+      ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.fillRect(p.x - pad, p.y - pad, bw, bh);
+      ctx.fillStyle = hexToRgba(color, 1);
+      ctx.fillText(text, p.x, p.y);
+      ctx.restore();
+      pushHistory();
+    }
+    e.preventDefault();
+  };
+
+  const onMove = (e) => {
+    if (!tool || !startRef.current) return;
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    const p = getPos(e);
+    const s = startRef.current;
+
+    if (tool === "highlight" || tool === "freehand") {
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    } else if (tool === "rect") {
+      restoreSnapshot(prevSnapshotRef.current);
+      ctx.strokeStyle = hexToRgba(color, Math.max(opacity, 0.85));
+      ctx.lineWidth = strokeWidth;
+      ctx.strokeRect(Math.min(s.x, p.x), Math.min(s.y, p.y), Math.abs(p.x - s.x), Math.abs(p.y - s.y));
+    } else if (tool === "arrow") {
+      restoreSnapshot(prevSnapshotRef.current);
+      drawArrow(ctx, s.x, s.y, p.x, p.y, hexToRgba(color, Math.max(opacity, 0.85)), strokeWidth);
+    }
+  };
+
+  const onUp = () => {
+    if (!tool || !startRef.current) return;
+    startRef.current = null;
+    prevSnapshotRef.current = null;
+    if (tool !== "text") pushHistory();
   };
 
   const exportDataUrl = () => canvasRef.current?.toDataURL("image/png") || snip.dataUrl;
 
+  const toolBtn = (key, Icon, label) => (
+    <button
+      className={`mr-btn ${tool === key ? "mr-btn-active" : ""}`}
+      onClick={() => setTool(tool === key ? null : key)}
+      data-testid={`mr-snip-tool-${key}`}
+      title={label}
+    >
+      <Icon size={14} /> {label}
+    </button>
+  );
+
   return (
     <div className="mr-shortcuts-panel" onClick={onClose} data-testid="mr-snip-preview">
-      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 900, width: "90%" }}>
+      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 980, width: "94%" }}>
         <h2 style={{ fontSize: 18 }}>
-          معاينة اللقطة
+          معاينة وتحرير اللقطة
           <span style={{ fontSize: 13, color: "var(--amber)", marginInlineStart: 12, fontFamily: "inherit" }}>
             {snip.folio} · سطر {snip.line}
           </span>
         </h2>
 
-        <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-          <button
-            className={`mr-btn ${tool === "highlight" ? "mr-btn-active" : ""}`}
-            onClick={() => setTool(tool === "highlight" ? null : "highlight")}
-            data-testid="mr-snip-tool-highlight"
-          >
-            <Highlighter size={14} /> إبراز أصفر
-          </button>
-          {tool && (
-            <span style={{ fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>
-              انقر واسحب على الصورة للتلوين
-            </span>
+        <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {toolBtn("highlight", Highlighter, "إبراز")}
+          {toolBtn("rect", Square, "إطار")}
+          {toolBtn("arrow", ArrowUpRight, "سهم")}
+          {toolBtn("text", Type, "نص")}
+          {toolBtn("freehand", Pencil, "قلم حر")}
+
+          <div style={{ display: "flex", gap: 4, alignItems: "center", marginInlineStart: 10 }}>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>اللون:</span>
+            {["#e63946", "#f2c14e", "#2a9d8f", "#264653", "#000000", "#ffffff"].map((c) => (
+              <button
+                key={c}
+                onClick={() => setColor(c)}
+                title={c}
+                data-testid={`mr-snip-color-${c}`}
+                style={{
+                  width: 22, height: 22, borderRadius: 4, border: color === c ? "2px solid var(--amber)" : "1px solid var(--line)",
+                  background: c, cursor: "pointer",
+                }}
+              />
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginInlineStart: 10 }}>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>الشفافية: <b style={{ color: "var(--amber)" }}>{Math.round(opacity * 100)}%</b></span>
+            <input type="range" min="10" max="100" value={Math.round(opacity * 100)} onChange={(e) => setOpacity(Number(e.target.value) / 100)} data-testid="mr-snip-opacity" style={{ width: 90 }} />
+          </div>
+
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>السماكة: <b style={{ color: "var(--amber)" }}>{strokeWidth}</b></span>
+            <input type="range" min="1" max="16" value={strokeWidth} onChange={(e) => setStrokeWidth(Number(e.target.value))} data-testid="mr-snip-stroke" style={{ width: 80 }} />
+          </div>
+
+          {tool === "text" && (
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: "var(--muted)" }}>حجم الخط:</span>
+              <input type="number" min="10" max="80" value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} style={{ width: 55, padding: "2px 6px", borderRadius: 4, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontSize: 12 }} />
+            </div>
           )}
+
+          <button
+            className="mr-btn"
+            onClick={undo}
+            disabled={history.length <= 1}
+            data-testid="mr-snip-undo"
+            title="تراجع (Ctrl+Z)"
+            style={{ marginInlineStart: "auto" }}
+          >
+            <RotateCcw size={13} /> تراجع
+          </button>
         </div>
 
-        <div style={{ background: "#0a0806", border: "1px solid var(--line)", borderRadius: 8, padding: 6, textAlign: "center", maxHeight: "55vh", overflow: "auto" }}>
+        <div style={{ background: "#0a0806", border: "1px solid var(--line)", borderRadius: 8, padding: 6, textAlign: "center", maxHeight: "50vh", overflow: "auto" }}>
           <canvas
             ref={canvasRef}
             onMouseDown={onDown}
             onMouseMove={onMove}
             onMouseUp={onUp}
             onMouseLeave={onUp}
-            style={{ maxWidth: "100%", cursor: tool === "highlight" ? "crosshair" : "default" }}
+            style={{ maxWidth: "100%", cursor: tool ? "crosshair" : "default" }}
           />
         </div>
 

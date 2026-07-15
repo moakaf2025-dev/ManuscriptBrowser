@@ -46,12 +46,12 @@ async def root():
 
 @api_router.get("/download/windows")
 async def download_windows_app():
-    zip_path = Path("/app/desktop/dist/MusattaraDesktop-Windows-Portable.zip")
+    zip_path = Path("/app/desktop/dist/ManuscriptBrowser-Windows-Portable.zip")
     if not zip_path.exists():
         return {"error": "build not available"}
     return FileResponse(
         path=str(zip_path),
-        filename="MusattaraDesktop-Windows-Portable.zip",
+        filename="ManuscriptBrowser-Windows-Portable.zip",
         media_type="application/zip",
     )
 

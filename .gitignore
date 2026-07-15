@@ -93,3 +93,5 @@ desktop/node_modules/electron/dist/electron
 credentials.json
 *.key
 .credentials
+desktop/dist/ManuscriptBrowser-Windows-Portable.zip
+desktop/dist/win-unpacked/ManuscriptBrowser.exe
