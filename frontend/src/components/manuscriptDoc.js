@@ -58,67 +58,92 @@ function createImageDoc(imageUrls) {
 }
 
 // ------------------- Splitting-doc wrapper -------------------
-// Given a base doc, produces a doc with 2N pages where each parent page
-// is split into (right-half, left-half) — RTL order for Arabic manuscripts.
+// Given a base doc, produces a doc where pages within `range` are split into two,
+// and pages outside `range` remain single. RTL: right half first (recto), then left (verso).
 function createSplittingDoc(baseDoc, opts = {}) {
-  const rtl = opts.rtl !== false; // right = A (first), left = B (second)
-  const foldCache = new Map(); // basePageNum -> foldX ratio (0..1)
+  const rtl = opts.rtl !== false;
+  const totalBase = baseDoc.numPages;
+  const rangeFrom = Math.max(1, Math.min(totalBase, opts.range?.from || 1));
+  const rangeTo = Math.max(rangeFrom, Math.min(totalBase, opts.range?.to || totalBase));
+  const foldCache = new Map();
+
+  const splitCount = rangeTo - rangeFrom + 1; // pages that get split
+  const numPages = totalBase + splitCount; // each split adds 1 extra
+
+  // Map virtual page number (1-based in the wrapped doc) to base page + optional side
+  function resolve(virt) {
+    // Pages before range: 1:1 mapping
+    if (virt < rangeFrom) return { basePage: virt, split: false };
+    // Within split range (each base becomes 2)
+    const rangeStartVirt = rangeFrom;
+    const rangeSize = splitCount * 2;
+    if (virt <= rangeStartVirt + rangeSize - 1) {
+      const offset = virt - rangeStartVirt; // 0-based
+      const baseOffset = Math.floor(offset / 2); // which base page within range
+      const side = offset % 2; // 0 = first, 1 = second
+      return {
+        basePage: rangeFrom + baseOffset,
+        split: true,
+        side, // 0 = first (right in RTL)
+      };
+    }
+    // After range: shift back by splitCount extras
+    return { basePage: virt - splitCount, split: false };
+  }
 
   return {
     kind: "split-" + baseDoc.kind,
-    numPages: baseDoc.numPages * 2,
+    numPages,
     _base: baseDoc,
     _rtl: rtl,
-    getPage: async (splitPageNum) => {
-      const basePageNum = Math.ceil(splitPageNum / 2);
-      const sideIndex = ((splitPageNum - 1) % 2); // 0 = first, 1 = second
-      const basePage = await baseDoc.getPage(basePageNum);
+    _range: { from: rangeFrom, to: rangeTo },
+    resolve,
+    getPage: async (virtPageNum) => {
+      const { basePage, split, side } = resolve(virtPageNum);
+      const basePageObj = await baseDoc.getPage(basePage);
 
-      // Render base page at scale=1 to compute fold if not cached
-      let foldRatio = foldCache.get(basePageNum);
+      if (!split) {
+        return basePageObj; // pass-through
+      }
+
+      // Detect fold for this base page (cached)
+      let foldRatio = foldCache.get(basePage);
       if (foldRatio == null) {
-        const bv = basePage.getViewport({ scale: 1, rotation: 0 });
+        const bv = basePageObj.getViewport({ scale: 1, rotation: 0 });
         const off = document.createElement("canvas");
         off.width = Math.min(1200, Math.floor(bv.width));
         const ratio = off.width / bv.width;
         off.height = Math.floor(bv.height * ratio);
         const ctx = off.getContext("2d", { willReadFrequently: true });
-        const vp = basePage.getViewport({ scale: ratio, rotation: 0 });
-        await basePage.render({ canvasContext: ctx, viewport: vp }).promise;
+        const vp = basePageObj.getViewport({ scale: ratio, rotation: 0 });
+        await basePageObj.render({ canvasContext: ctx, viewport: vp }).promise;
         foldRatio = detectFoldColumn(off) / off.width;
-        foldCache.set(basePageNum, foldRatio);
+        foldCache.set(basePage, foldRatio);
       }
 
-      const isRight = rtl ? sideIndex === 0 : sideIndex === 1;
+      const isRight = rtl ? side === 0 : side === 1;
 
       return {
-        _basePage: basePage,
+        _basePage: basePageObj,
         _foldRatio: foldRatio,
         _isRight: isRight,
         getViewport: ({ scale = 1, rotation = 0 } = {}) => {
-          const bv = basePage.getViewport({ scale, rotation });
-          const rotated = (rotation || 0) % 180 !== 0;
-          if (rotated) {
-            // when rotated 90/270, splitting is more complex; fallback to half-height
-            return { width: bv.width, height: bv.height / 2, scale, rotation, _rotated: true };
-          }
+          const bv = basePageObj.getViewport({ scale, rotation });
           const w = isRight ? bv.width * (1 - foldRatio) : bv.width * foldRatio;
-          return { width: w, height: bv.height, scale, rotation, _foldPx: bv.width * foldRatio };
+          return { width: w, height: bv.height, scale, rotation };
         },
         render: ({ canvasContext, viewport }) => {
           return {
             promise: (async () => {
               const { rotation = 0, scale } = viewport;
-              const bv = basePage.getViewport({ scale, rotation });
-              // render full base to off-screen
+              const bv = basePageObj.getViewport({ scale, rotation });
               const off = document.createElement("canvas");
               off.width = Math.floor(bv.width);
               off.height = Math.floor(bv.height);
               const offCtx = off.getContext("2d");
-              await basePage.render({ canvasContext: offCtx, viewport: bv }).promise;
+              await basePageObj.render({ canvasContext: offCtx, viewport: bv }).promise;
               const foldPx = bv.width * foldRatio;
               if (isRight) {
-                // right half: sx = foldPx, sw = bv.width - foldPx
                 const sw = bv.width - foldPx;
                 canvasContext.drawImage(off, foldPx, 0, sw, bv.height, 0, 0, sw, bv.height);
               } else {
@@ -130,7 +155,6 @@ function createSplittingDoc(baseDoc, opts = {}) {
         },
       };
     },
-    // Expose base for potential later use
     baseDoc,
   };
 }
@@ -186,8 +210,53 @@ export async function unpackZip(file, JSZip) {
   return { images, pdfs };
 }
 
+// ------------------- RAR / 7z / tar handling (via libarchive.js WASM) -------------------
+let _archiveLibPromise = null;
+async function getLibArchive() {
+  if (!_archiveLibPromise) {
+    _archiveLibPromise = (async () => {
+      const mod = await import("libarchive.js");
+      const Archive = mod.Archive || mod.default?.Archive;
+      Archive.init({
+        workerUrl: `${process.env.PUBLIC_URL || ""}/libarchive-worker.js`,
+      });
+      return Archive;
+    })();
+  }
+  return _archiveLibPromise;
+}
+
+export async function unpackArchive(file) {
+  const Archive = await getLibArchive();
+  const archive = await Archive.open(file);
+  const files = await archive.getFilesArray();
+  // Sort by filename with natural order
+  files.sort((a, b) => {
+    const pa = (a.path || "") + a.file.name;
+    const pb = (b.path || "") + b.file.name;
+    return pa.localeCompare(pb, undefined, { numeric: true, sensitivity: "base" });
+  });
+  const images = [];
+  const pdfs = [];
+  for (const f of files) {
+    const name = f.file.name;
+    if (IMAGE_EXT.test(name)) {
+      const extracted = await f.file.extract();
+      const blob = new Blob([await extracted.arrayBuffer()], { type: extracted.type || "image/jpeg" });
+      images.push({ name, blob });
+    } else if (PDF_EXT.test(name)) {
+      const extracted = await f.file.extract();
+      const blob = new Blob([await extracted.arrayBuffer()], { type: "application/pdf" });
+      pdfs.push({ name, blob });
+    }
+  }
+  return { images, pdfs };
+}
+
 // ------------------- Builder API -------------------
-export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = false } = {}) {
+const ARCHIVE_EXT = /\.(rar|7z|tar|tar\.gz|tgz|tar\.bz2)$/i;
+
+export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = false, splitRange } = {}) {
   const name = file.name.toLowerCase();
   let base;
 
@@ -198,10 +267,12 @@ export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = fal
   } else if (IMAGE_EXT.test(name)) {
     const url = URL.createObjectURL(file);
     base = createImageDoc([url]);
-  } else if (/\.zip$/i.test(name)) {
-    const { images, pdfs } = await unpackZip(file, JSZip);
+  } else if (/\.zip$/i.test(name) || ARCHIVE_EXT.test(name)) {
+    const isZip = /\.zip$/i.test(name);
+    const { images, pdfs } = isZip
+      ? await unpackZip(file, JSZip)
+      : await unpackArchive(file);
     if (pdfs.length > 0) {
-      // Use the largest PDF inside the ZIP
       pdfs.sort((a, b) => b.blob.size - a.blob.size);
       const buf = await pdfs[0].blob.arrayBuffer();
       base = await pdfjsLib.getDocument({ data: buf }).promise;
@@ -210,18 +281,18 @@ export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = fal
       const urls = images.map((i) => URL.createObjectURL(i.blob));
       base = createImageDoc(urls);
     } else {
-      throw new Error("لا توجد صور أو ملفات PDF داخل الملف المضغوط");
+      throw new Error("لا توجد صور أو ملفات PDF داخل الأرشيف");
     }
   } else {
-    throw new Error("صيغة غير مدعومة");
+    throw new Error("صيغة غير مدعومة (المدعوم: PDF، صور، ZIP، RAR، 7z، TAR)");
   }
 
-  return splitPages ? createSplittingDoc(base) : base;
+  return splitPages ? createSplittingDoc(base, { rtl: true, range: splitRange }) : base;
 }
 
 // Wrap an already-loaded base doc with splitting on/off dynamically
-export function toggleSplitDoc(baseDoc, split) {
-  if (split) return createSplittingDoc(baseDoc);
+export function toggleSplitDoc(baseDoc, split, splitRange) {
+  if (split) return createSplittingDoc(baseDoc, { rtl: true, range: splitRange });
   return baseDoc;
 }
 
@@ -256,4 +327,30 @@ export async function compressImage(source, { maxSize = 2000, quality = 0.82, mi
   ctx.fillRect(0, 0, cw, ch);
   ctx.drawImage(img, 0, 0, cw, ch);
   return new Promise((resolve) => canvas.toBlob(resolve, mime, quality));
+}
+
+// ------------------- Export full doc as PDF -------------------
+export async function exportDocAsPdf(doc, { PDFDocument, maxSize = 2000, quality = 0.82, onProgress } = {}) {
+  const pdfDoc = await PDFDocument.create();
+  for (let i = 1; i <= doc.numPages; i++) {
+    if (onProgress) onProgress(i, doc.numPages);
+    const page = await doc.getPage(i);
+    const vp = page.getViewport({ scale: 1, rotation: 0 });
+    const targetScale = Math.min(1, maxSize / Math.max(vp.width, vp.height));
+    const rvp = page.getViewport({ scale: targetScale, rotation: 0 });
+    const off = document.createElement("canvas");
+    off.width = Math.floor(rvp.width);
+    off.height = Math.floor(rvp.height);
+    const ctx = off.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, off.width, off.height);
+    await page.render({ canvasContext: ctx, viewport: rvp }).promise;
+    const blob = await new Promise((r) => off.toBlob(r, "image/jpeg", quality));
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const img = await pdfDoc.embedJpg(bytes);
+    const pdfPage = pdfDoc.addPage([img.width, img.height]);
+    pdfPage.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+  }
+  const pdfBytes = await pdfDoc.save();
+  return new Blob([pdfBytes], { type: "application/pdf" });
 }

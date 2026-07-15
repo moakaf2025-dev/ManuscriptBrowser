@@ -25,7 +25,8 @@ import {
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
-import { buildDocFromFile, toggleSplitDoc, formatFolio, compressImage, loadImage } from "./manuscriptDoc";
+import { buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf } from "./manuscriptDoc";
+import { PDFDocument } from "pdf-lib";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `${process.env.PUBLIC_URL || ""}/pdf.worker.min.mjs`;
 
@@ -52,11 +53,14 @@ const DEFAULT_STATE = {
   contrast: 100,
   invert: false,
   splitPages: false,
+  splitFrom: 1,
+  splitTo: 999,
   folioMode: true,        // when true, show as 1a/1b instead of "صفحة 1"
   folioStart: 1,          // starting folio number
   folioOffset: 0,         // number of front pages before manuscript begins
   exportMaxSize: 2000,
   exportQuality: 82,
+  exportFormat: "zip",    // "zip" | "pdf"
 };
 
 function loadState() {
@@ -152,15 +156,16 @@ export default function ManuscriptRuler() {
     setLoadingMsg("جارٍ فتح الملف…");
     try {
       const fileKey = `${file.name}|${file.size}|${file.lastModified || 0}`;
-      const isZip = /\.zip$/i.test(file.name);
-      if (isZip) setLoadingMsg("جارٍ فك ضغط الملف…");
-      const baseD = await buildDocFromFile(file, { pdfjsLib, JSZip, splitPages: false });
-      const wrapped = state.splitPages ? toggleSplitDoc(baseD, true) : baseD;
+      const isArchive = /\.(zip|rar|7z|tar|tar\.gz|tgz|tar\.bz2)$/i.test(file.name);
+      if (isArchive) setLoadingMsg("جارٍ فك ضغط الملف…");
+      const range = { from: state.splitFrom, to: state.splitTo };
+      const baseD = await buildDocFromFile(file, { pdfjsLib, JSZip, splitPages: false, splitRange: range });
+      const wrapped = state.splitPages ? toggleSplitDoc(baseD, true, range) : baseD;
       setBaseDoc(baseD);
       setDoc(wrapped);
       setPageCount(wrapped.numPages);
-      const ft = baseD.kind === "pdf" ? "pdf" : isZip ? "zip" : "image";
-      setState((s) => ({ ...s, fileName: file.name, fileKey, fileType: ft, page: 1, rulerY: 0 }));
+      const ft = baseD.kind === "pdf" ? "pdf" : isArchive ? "archive" : "image";
+      setState((s) => ({ ...s, fileName: file.name, fileKey, fileType: ft, page: 1, rulerY: 0, splitTo: Math.min(s.splitTo, baseD.numPages) }));
     } catch (e) {
       console.error(e);
       showToast(e.message || "تعذّر فتح الملف");
@@ -288,16 +293,36 @@ export default function ManuscriptRuler() {
     setLoading(true);
     setLoadingMsg(next ? "جارٍ الكشف عن خط طي الصفحات…" : "جارٍ استعادة الصفحات الأصلية…");
     try {
-      const wrapped = toggleSplitDoc(baseDoc, next);
+      const range = { from: state.splitFrom, to: Math.min(state.splitTo, baseDoc.numPages) };
+      const wrapped = toggleSplitDoc(baseDoc, next, range);
       setDoc(wrapped);
       setPageCount(wrapped.numPages);
-      // adjust page number to stay on the same physical page's first half
       setState((s) => ({
         ...s,
         splitPages: next,
-        page: next ? Math.max(1, s.page * 2 - 1) : Math.max(1, Math.ceil(s.page / 2)),
+        page: 1,
         rulerY: 0,
       }));
+    } finally {
+      setLoading(false);
+      setLoadingMsg("جارٍ تحميل الصفحة…");
+    }
+  };
+
+  // Re-wrap doc when split range changes while split is active
+  const applySplitRange = async (from, to) => {
+    if (!baseDoc || !state.splitPages) {
+      setState((s) => ({ ...s, splitFrom: from, splitTo: to }));
+      return;
+    }
+    setLoading(true);
+    setLoadingMsg("جارٍ إعادة تطبيق التقسيم…");
+    try {
+      const range = { from, to: Math.min(to, baseDoc.numPages) };
+      const wrapped = toggleSplitDoc(baseDoc, true, range);
+      setDoc(wrapped);
+      setPageCount(wrapped.numPages);
+      setState((s) => ({ ...s, splitFrom: from, splitTo: to, page: 1, rulerY: 0 }));
     } finally {
       setLoading(false);
       setLoadingMsg("جارٍ تحميل الصفحة…");
@@ -308,45 +333,64 @@ export default function ManuscriptRuler() {
   const exportCompressed = async () => {
     if (!doc) return;
     setLoading(true);
-    setLoadingMsg("جارٍ تصغير الصور وتصديرها…");
+    setLoadingMsg("جارٍ التصدير…");
     try {
-      const zip = new JSZip();
       const maxSize = state.exportMaxSize;
       const quality = state.exportQuality / 100;
-      const pad = String(pageCount).length;
-      for (let i = 1; i <= pageCount; i++) {
-        setLoadingMsg(`جارٍ معالجة صفحة ${i} / ${pageCount}…`);
-        const page = await doc.getPage(i);
-        const vp = page.getViewport({ scale: 1, rotation: 0 });
-        // scale down to maxSize while rendering
-        const targetScale = Math.min(1, maxSize / Math.max(vp.width, vp.height));
-        const rvp = page.getViewport({ scale: targetScale, rotation: 0 });
-        const off = document.createElement("canvas");
-        off.width = Math.floor(rvp.width);
-        off.height = Math.floor(rvp.height);
-        const ctx = off.getContext("2d");
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, off.width, off.height);
-        await page.render({ canvasContext: ctx, viewport: rvp }).promise;
-        const blob = await new Promise((r) => off.toBlob(r, "image/jpeg", quality));
-        const label = state.folioMode
-          ? formatFolio(i, { startFolio: state.folioStart, offset: state.folioOffset })
-          : `page-${String(i).padStart(pad, "0")}`;
-        const safeLabel = label.replace(/[\/\\]/g, "-");
-        zip.file(`${String(i).padStart(pad, "0")}_${safeLabel}.jpg`, blob);
-      }
-      setLoadingMsg("جارٍ إنشاء الملف المضغوط…");
-      const zipBlob = await zip.generateAsync({ type: "blob" });
-      const url = URL.createObjectURL(zipBlob);
-      const a = document.createElement("a");
-      a.href = url;
       const base = (state.fileName || "manuscript").replace(/\.[^.]+$/, "");
-      a.download = `${base}-compressed.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      showToast("تم التصدير بنجاح");
+
+      if (state.exportFormat === "pdf") {
+        const blob = await exportDocAsPdf(doc, {
+          PDFDocument,
+          maxSize,
+          quality,
+          onProgress: (i, total) => setLoadingMsg(`جارٍ إنشاء PDF: صفحة ${i} / ${total}…`),
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${base}-compressed.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        showToast("تم تصدير PDF بنجاح");
+      } else {
+        // ZIP export
+        const zip = new JSZip();
+        const pad = String(pageCount).length;
+        for (let i = 1; i <= pageCount; i++) {
+          setLoadingMsg(`جارٍ معالجة صفحة ${i} / ${pageCount}…`);
+          const page = await doc.getPage(i);
+          const vp = page.getViewport({ scale: 1, rotation: 0 });
+          const targetScale = Math.min(1, maxSize / Math.max(vp.width, vp.height));
+          const rvp = page.getViewport({ scale: targetScale, rotation: 0 });
+          const off = document.createElement("canvas");
+          off.width = Math.floor(rvp.width);
+          off.height = Math.floor(rvp.height);
+          const ctx = off.getContext("2d");
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, off.width, off.height);
+          await page.render({ canvasContext: ctx, viewport: rvp }).promise;
+          const blob = await new Promise((r) => off.toBlob(r, "image/jpeg", quality));
+          const label = state.folioMode
+            ? formatFolio(i, { startFolio: state.folioStart, offset: state.folioOffset })
+            : `page-${String(i).padStart(pad, "0")}`;
+          const safeLabel = label.replace(/[\/\\[\]]/g, "-");
+          zip.file(`${String(i).padStart(pad, "0")}_${safeLabel}.jpg`, blob);
+        }
+        setLoadingMsg("جارٍ إنشاء الملف المضغوط…");
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${base}-compressed.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        showToast("تم التصدير بنجاح");
+      }
     } catch (e) {
       console.error(e);
       showToast("تعذّر التصدير");
@@ -546,7 +590,7 @@ export default function ManuscriptRuler() {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf,.zip,image/*"
+        accept=".pdf,.zip,.rar,.7z,.tar,.tar.gz,.tgz,image/*"
         style={{ display: "none" }}
         onChange={onFileInputChange}
         data-testid="mr-file-input"
@@ -730,12 +774,12 @@ export default function ManuscriptRuler() {
             <div className="mr-empty-mark">م</div>
             <h1>مسطرة قراءة المخطوطات</h1>
             <p>
-              أداة بسيطة لعرض صور المخطوطات وملفات PDF أو ZIP مع مسطرة أفقية شفافة تُحرَّك يدوياً
+              أداة بسيطة لعرض صور المخطوطات وملفات PDF أو أرشيفات (ZIP / RAR / 7z) مع مسطرة أفقية شفافة تُحرَّك يدوياً
               سطراً سطراً، لتوجيه النظر وتقليل التشتت أثناء المقابلة والقراءة.
             </p>
             <button className="mr-btn mr-btn-primary" onClick={openFile} data-testid="mr-empty-open">
               <FolderOpen size={16} />
-              افتح ملف صورة أو PDF أو ZIP
+              افتح ملف (PDF / صورة / ZIP / RAR / 7z)
             </button>
             <a
               href={`${process.env.REACT_APP_BACKEND_URL || ""}/api/download/windows`}
@@ -1046,11 +1090,22 @@ export default function ManuscriptRuler() {
         )}
 
         {showFolioSettings && (
-          <div className="mr-settings mr-fade" data-testid="mr-folio-settings" style={{ inset: "auto 10px 10px auto", top: 60 }}>
-            <h3>ترقيم المخطوط (a / b)</h3>
+          <div className="mr-settings mr-fade" data-testid="mr-folio-settings" style={{ inset: "auto 10px 10px auto", top: 60, width: 340 }}>
+            <h3>ترقيم المخطوط + مدى التقسيم</h3>
+
+            <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.7 }}>
+              <b style={{ color: "var(--amber)" }}>كيف يعمل الترقيم؟</b>
+              <br />
+              في علم المخطوطات، كل ورقة لها وجهان: <b>a</b> (recto/الوجه الأيمن) و <b>b</b> (verso/الوجه الأيسر). فالورقة الأولى صفحتاها <b>1a</b> ثم <b>1b</b>، ثم <b>2a</b> و <b>2b</b>… وهكذا.
+              <br /><br />
+              إذا كان في بداية الملف صفحات غلاف أو فهرسة قبل نص المخطوط، حدّد عددها في «صفحات الغلاف قبل بداية المخطوط»، فيبدأ الترقيم بعدها.
+              <br /><br />
+              مثال: لديك ملف فيه 3 صفحات غلاف قبل نص المخطوط، ضع القيمة 3، فتصير الصفحة الرابعة <b>1a</b>.
+            </div>
+
             <div className="mr-field">
               <label style={{ cursor: "pointer", flexDirection: "row", justifyContent: "space-between" }}>
-                <span>تفعيل ترقيم الفوليو (1a, 1b, 2a, 2b…)</span>
+                <span>تفعيل ترقيم الفوليو</span>
                 <input
                   type="checkbox"
                   checked={state.folioMode}
@@ -1062,26 +1117,18 @@ export default function ManuscriptRuler() {
             </div>
 
             <div className="mr-field">
-              <label>
-                رقم الفوليو الأول <span className="val">{state.folioStart}</span>
-              </label>
+              <label>رقم الفوليو الأول <span className="val">{state.folioStart}</span></label>
               <input
-                type="number"
-                min="1"
-                value={state.folioStart}
+                type="number" min="1" value={state.folioStart}
                 onChange={(e) => setState((s) => ({ ...s, folioStart: Math.max(1, Number(e.target.value) || 1) }))}
                 data-testid="mr-folio-start"
               />
             </div>
 
             <div className="mr-field">
-              <label>
-                عدد صفحات الغلاف قبل بداية المخطوط <span className="val">{state.folioOffset}</span>
-              </label>
+              <label>صفحات الغلاف قبل بداية المخطوط <span className="val">{state.folioOffset}</span></label>
               <input
-                type="number"
-                min="0"
-                value={state.folioOffset}
+                type="number" min="0" value={state.folioOffset}
                 onChange={(e) => setState((s) => ({ ...s, folioOffset: Math.max(0, Number(e.target.value) || 0) }))}
                 data-testid="mr-folio-offset"
               />
@@ -1095,22 +1142,70 @@ export default function ManuscriptRuler() {
                   : `صفحة ${state.page}`}
               </span>
             </div>
+
+            <h3 style={{ marginTop: 6 }}>مدى التقسيم</h3>
+            <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.6 }}>
+              حدّد أول وآخر صفحة يُطبَّق عليها التقسيم (رقم الصفحة في <b>الملف الأصلي</b>). الصفحات خارج هذا المدى تبقى بدون تقسيم — مفيد إذا كانت أول صفحة (الغلاف) أو الأخيرة (كولوفون) بلا طية.
+            </div>
+
+            <div className="mr-field">
+              <label>ابدأ التقسيم من صفحة <span className="val">{state.splitFrom}</span></label>
+              <input
+                type="number" min="1"
+                value={state.splitFrom}
+                onChange={(e) => applySplitRange(Math.max(1, Number(e.target.value) || 1), state.splitTo)}
+                data-testid="mr-split-from"
+              />
+            </div>
+
+            <div className="mr-field">
+              <label>انتهِ عند صفحة <span className="val">{Math.min(state.splitTo, baseDoc?.numPages || state.splitTo)}</span></label>
+              <input
+                type="number" min="1"
+                value={state.splitTo}
+                onChange={(e) => applySplitRange(state.splitFrom, Math.max(state.splitFrom, Number(e.target.value) || state.splitFrom))}
+                data-testid="mr-split-to"
+              />
+            </div>
+
+            {baseDoc && (
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                إجمالي صفحات الملف الأصلي: <b style={{ color: "var(--parchment)" }}>{baseDoc.numPages}</b>
+              </div>
+            )}
           </div>
         )}
 
         {showExport && (
-          <div className="mr-settings mr-fade" data-testid="mr-export-panel" style={{ inset: "auto 10px 10px auto", top: 60 }}>
-            <h3>تصدير / تصغير الصور</h3>
+          <div className="mr-settings mr-fade" data-testid="mr-export-panel" style={{ inset: "auto 10px 10px auto", top: 60, width: 320 }}>
+            <h3>تصدير المخطوط</h3>
 
             <div className="mr-field">
-              <label>
-                أقصى بُعد للصورة <span className="val">{state.exportMaxSize}px</span>
-              </label>
+              <label>صيغة التصدير</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  className={`mr-btn ${state.exportFormat === "zip" ? "mr-btn-active" : ""}`}
+                  style={{ flex: 1, justifyContent: "center" }}
+                  onClick={() => setState((s) => ({ ...s, exportFormat: "zip" }))}
+                  data-testid="mr-export-fmt-zip"
+                >
+                  <Archive size={14} /> ZIP (صور)
+                </button>
+                <button
+                  className={`mr-btn ${state.exportFormat === "pdf" ? "mr-btn-active" : ""}`}
+                  style={{ flex: 1, justifyContent: "center" }}
+                  onClick={() => setState((s) => ({ ...s, exportFormat: "pdf" }))}
+                  data-testid="mr-export-fmt-pdf"
+                >
+                  <FileText size={14} /> PDF
+                </button>
+              </div>
+            </div>
+
+            <div className="mr-field">
+              <label>أقصى بُعد للصورة <span className="val">{state.exportMaxSize}px</span></label>
               <input
-                type="range"
-                min="800"
-                max="3600"
-                step="100"
+                type="range" min="800" max="3600" step="100"
                 value={state.exportMaxSize}
                 onChange={(e) => setState((s) => ({ ...s, exportMaxSize: Number(e.target.value) }))}
                 data-testid="mr-export-size"
@@ -1118,27 +1213,26 @@ export default function ManuscriptRuler() {
             </div>
 
             <div className="mr-field">
-              <label>
-                جودة JPEG <span className="val">{state.exportQuality}%</span>
-              </label>
+              <label>جودة JPEG <span className="val">{state.exportQuality}%</span></label>
               <input
-                type="range"
-                min="50"
-                max="95"
+                type="range" min="50" max="95"
                 value={state.exportQuality}
                 onChange={(e) => setState((s) => ({ ...s, exportQuality: Number(e.target.value) }))}
                 data-testid="mr-export-quality"
               />
             </div>
 
-            <div style={{ fontSize: 12, color: "var(--muted)", padding: "6px 8px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)" }}>
-              سيُصدَّر المخطوط كملف ZIP يحتوي على {pageCount} صورة JPEG مضغوطة، مع تسمية كل صفحة بترقيمها الحالي.
+            <div style={{ fontSize: 12, color: "var(--muted)", padding: "6px 8px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.6 }}>
+              {state.exportFormat === "pdf"
+                ? `سيُصدَّر المخطوط كملف PDF واحد يحتوي على ${pageCount} صفحة.`
+                : `سيُصدَّر المخطوط كملف ZIP فيه ${pageCount} صورة JPEG مرقّمة بالفوليو الحالي.`}
             </div>
 
             <button
               className="mr-btn mr-btn-primary"
               onClick={exportCompressed}
               data-testid="mr-export-run"
+              style={{ justifyContent: "center" }}
             >
               <Download size={14} />
               تصدير الآن
