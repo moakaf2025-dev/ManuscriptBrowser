@@ -11,6 +11,8 @@ import {
   EyeOff,
   ChevronRight,
   ChevronLeft,
+  ChevronsRight,
+  ChevronsLeft,
   Keyboard,
   X,
   Bookmark,
@@ -49,14 +51,14 @@ const STORAGE_KEY = "manuscriptRulerState.v1";
 const BOOKMARKS_KEY = "manuscriptRulerBookmarks.v1";
 const COMMENTS_KEY = "manuscriptRulerComments.v1";
 const INFO_KEY = "manuscriptRulerInfo.v1";
-const ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+const ZOOM_LEVELS = [0.1, 0.15, 0.2, 0.25, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 
 const DEFAULT_STATE = {
   fileName: "",
   fileKey: "",
   fileType: "", // 'image' | 'pdf' | 'zip'
   page: 1,
-  zoomIdx: 2,
+  zoomIdx: 7,  // index of 1.0 in ZOOM_LEVELS
   rotation: 0,
   rulerY: 100,
   rulerHeight: 32,
@@ -230,14 +232,14 @@ export default function ManuscriptRuler() {
       const fileKey = `${file.name}|${file.size}|${file.lastModified || 0}`;
       const isArchive = /\.(zip|rar|7z|tar|tar\.gz|tgz|tar\.bz2)$/i.test(file.name);
       if (isArchive) setLoadingMsg("جارٍ فك ضغط الملف…");
-      const range = { from: state.splitFrom, to: state.splitTo };
-      const baseD = await buildDocFromFile(file, { pdfjsLib, JSZip, splitPages: false, splitRange: range });
-      const wrapped = state.splitPages ? toggleSplitDoc(baseD, true, range) : baseD;
+      const baseD = await buildDocFromFile(file, { pdfjsLib, JSZip, splitPages: false });
+      const range = { from: 1, to: baseD.numPages };
+      const wrapped = baseD; // always start without splitting; user opts in
       setBaseDoc(baseD);
       setDoc(wrapped);
       setPageCount(wrapped.numPages);
       const ft = baseD.kind === "pdf" ? "pdf" : isArchive ? "archive" : "image";
-      setState((s) => ({ ...s, fileName: file.name, fileKey, fileType: ft, page: 1, rulerY: 0, splitTo: Math.min(s.splitTo, baseD.numPages) }));
+      setState((s) => ({ ...s, fileName: file.name, fileKey, fileType: ft, page: 1, rulerY: 0, splitPages: false, splitFrom: 1, splitTo: baseD.numPages }));
     } catch (e) {
       console.error(e);
       showToast(e.message || "تعذّر فتح الملف");
@@ -355,6 +357,14 @@ export default function ManuscriptRuler() {
   const prevPage = () => {
     if (!doc) return;
     setState((s) => ({ ...s, page: Math.max(1, s.page - 1), rulerY: 0 }));
+  };
+  const firstPage = () => {
+    if (!doc) return;
+    setState((s) => ({ ...s, page: 1, rulerY: 0 }));
+  };
+  const lastPage = () => {
+    if (!doc) return;
+    setState((s) => ({ ...s, page: pageCount, rulerY: 0 }));
   };
   const toggleRuler = () => setState((s) => ({ ...s, rulerVisible: !s.rulerVisible }));
 
@@ -817,6 +827,14 @@ ${sorted.length === 0
           e.preventDefault();
           prevPage();
           break;
+        case "Home":
+          e.preventDefault();
+          firstPage();
+          break;
+        case "End":
+          e.preventDefault();
+          lastPage();
+          break;
         case "r":
         case "R":
           rotate();
@@ -1089,6 +1107,15 @@ ${sorted.length === 0
             <>
               <button
                 className="mr-btn mr-btn-icon"
+                onClick={firstPage}
+                disabled={state.page <= 1}
+                title="أول المخطوط"
+                data-testid="mr-btn-first"
+              >
+                <ChevronsRight size={18} />
+              </button>
+              <button
+                className="mr-btn mr-btn-icon"
                 onClick={prevPage}
                 disabled={state.page <= 1}
                 title="الصفحة السابقة (Page Up)"
@@ -1114,6 +1141,15 @@ ${sorted.length === 0
                 data-testid="mr-btn-next"
               >
                 <ChevronLeft size={18} />
+              </button>
+              <button
+                className="mr-btn mr-btn-icon"
+                onClick={lastPage}
+                disabled={state.page >= pageCount}
+                title="آخر المخطوط"
+                data-testid="mr-btn-last"
+              >
+                <ChevronsLeft size={18} />
               </button>
             </>
           )}

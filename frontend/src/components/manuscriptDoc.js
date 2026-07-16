@@ -272,11 +272,28 @@ export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = fal
     const { images, pdfs } = isZip
       ? await unpackZip(file, JSZip)
       : await unpackArchive(file);
-    if (pdfs.length > 0) {
-      pdfs.sort((a, b) => b.blob.size - a.blob.size);
-      const buf = await pdfs[0].blob.arrayBuffer();
-      base = await pdfjsLib.getDocument({ data: buf }).promise;
-      base.kind = "pdf";
+    // If no images and multiple PDFs, merge them into one
+    if (images.length === 0 && pdfs.length > 0) {
+      if (pdfs.length === 1) {
+        const buf = await pdfs[0].blob.arrayBuffer();
+        base = await pdfjsLib.getDocument({ data: buf }).promise;
+        base.kind = "pdf";
+      } else {
+        // Merge multiple PDFs via pdf-lib
+        const { PDFDocument } = await import("pdf-lib");
+        const merged = await PDFDocument.create();
+        // Sort PDFs by filename for consistent order
+        pdfs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+        for (const p of pdfs) {
+          const buf = await p.blob.arrayBuffer();
+          const src = await PDFDocument.load(buf);
+          const copied = await merged.copyPages(src, src.getPageIndices());
+          copied.forEach((pg) => merged.addPage(pg));
+        }
+        const mergedBytes = await merged.save();
+        base = await pdfjsLib.getDocument({ data: mergedBytes }).promise;
+        base.kind = "pdf";
+      }
     } else if (images.length > 0) {
       const urls = images.map((i) => URL.createObjectURL(i.blob));
       base = createImageDoc(urls);
