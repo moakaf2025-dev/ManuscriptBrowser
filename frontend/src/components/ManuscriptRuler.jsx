@@ -1550,6 +1550,26 @@ ${sorted.length === 0
               <FolderOpen size={20} />
               افتح ملف مخطوط
             </button>
+            {!window.msElectron && (
+              <a
+                href={`${process.env.REACT_APP_BACKEND_URL || ""}/api/download/windows`}
+                className="mr-btn"
+                data-testid="mr-download-windows"
+                style={{
+                  padding: "8px 16px",
+                  fontSize: 13,
+                  gap: 6,
+                  color: "var(--amber)",
+                  border: "1px solid var(--amber)",
+                  textDecoration: "none",
+                  marginTop: 4,
+                }}
+                download
+              >
+                <Download size={16} />
+                تنزيل نسخة سطح المكتب لويندوز (Portable)
+              </a>
+            )}
             <div className="mr-credits" data-testid="mr-credits">
               فكرة وتصميم: <b>د. محمد عمر أحمد الكاف</b> — اختصاصي مخطوطات
               <br />
