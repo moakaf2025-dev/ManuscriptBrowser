@@ -461,6 +461,72 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .mr-fade { animation: fadeIn 0.2s ease-out; }
 
 /* Manuscript Info Card (floating) */
+.mr-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 4px 6px;
+  background: var(--ink-2);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  scrollbar-width: thin;
+}
+.mr-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px 4px 10px;
+  border-radius: 6px 6px 0 0;
+  background: var(--ink-3);
+  color: var(--parchment-soft);
+  cursor: pointer;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-bottom: none;
+  white-space: nowrap;
+  transition: background 0.15s;
+  max-width: 220px;
+}
+.mr-tab:hover:not(.active) { background: #3d332c; }
+.mr-tab.active {
+  background: var(--ink);
+  color: var(--amber);
+  border-color: var(--amber);
+  border-bottom-color: var(--ink);
+  position: relative;
+  z-index: 1;
+  margin-bottom: -1px;
+}
+.mr-tab-name { overflow: hidden; text-overflow: ellipsis; }
+.mr-tab-close {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.55;
+  padding: 2px;
+  border-radius: 3px;
+  display: flex;
+}
+.mr-tab-close:hover { opacity: 1; background: rgba(0,0,0,0.3); color: var(--danger); }
+.mr-tab-add {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  margin-inline-start: 4px;
+  font-family: inherit;
+}
+.mr-tab-add:hover { border-color: var(--amber); color: var(--amber); }
+
+/* Manuscript Info Card (floating) */
 .mr-info-card {
   position: absolute;
   top: 8px;

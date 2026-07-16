@@ -167,9 +167,63 @@ export default function ManuscriptRuler() {
   const [commentModal, setCommentModal] = useState(null); // {editingId?, page, folio, y, text}
   const [snipping, setSnipping] = useState(false);
   const [snipResult, setSnipResult] = useState(null); // {dataUrl, folio, line, filename}
+  const [tabs, setTabs] = useState([]); // [{fileName, fileKey, baseDoc, doc, pageCount, page, rulerY, splitPages, splitFrom, splitTo}]
   const [toast, setToast] = useState("");
 
   const hasFile = Boolean(doc);
+
+  // ---------------- Tabs ----------------
+  const switchToTab = (idx) => {
+    if (idx < 0 || idx >= tabs.length) return;
+    // Save current active tab state
+    setTabs((prev) => {
+      const copy = [...prev];
+      const active = copy.findIndex((t) => t.fileKey === state.fileKey);
+      if (active >= 0) {
+        copy[active] = {
+          ...copy[active],
+          page: state.page,
+          rulerY: state.rulerY,
+          splitPages: state.splitPages,
+          splitFrom: state.splitFrom,
+          splitTo: state.splitTo,
+          doc: doc,
+          baseDoc: baseDoc,
+          pageCount: pageCount,
+        };
+      }
+      const target = copy[idx];
+      // Apply target tab state after this update
+      setBaseDoc(target.baseDoc);
+      setDoc(target.doc);
+      setPageCount(target.pageCount);
+      const ft = target.baseDoc?.kind === "pdf" ? "pdf" : "archive";
+      setState((s) => ({ ...s, fileName: target.fileName, fileKey: target.fileKey, fileType: ft, page: target.page, rulerY: target.rulerY, splitPages: target.splitPages, splitFrom: target.splitFrom, splitTo: target.splitTo }));
+      return copy;
+    });
+  };
+
+  const closeTab = (idx) => {
+    setTabs((prev) => {
+      const copy = prev.filter((_, i) => i !== idx);
+      const closingActive = prev[idx].fileKey === state.fileKey;
+      if (closingActive) {
+        if (copy.length > 0) {
+          const target = copy[Math.min(idx, copy.length - 1)];
+          setBaseDoc(target.baseDoc);
+          setDoc(target.doc);
+          setPageCount(target.pageCount);
+          setState((s) => ({ ...s, fileName: target.fileName, fileKey: target.fileKey, page: target.page, rulerY: target.rulerY, splitPages: target.splitPages, splitFrom: target.splitFrom, splitTo: target.splitTo }));
+        } else {
+          setBaseDoc(null);
+          setDoc(null);
+          setPageCount(0);
+          setState((s) => ({ ...s, fileName: "", fileKey: "", fileType: "", page: 1, rulerY: 0 }));
+        }
+      }
+      return copy;
+    });
+  };
   const [isFs, setIsFs] = useState(false);
 
   const canvasRef = useRef(null);
@@ -239,6 +293,26 @@ export default function ManuscriptRuler() {
       setDoc(wrapped);
       setPageCount(wrapped.numPages);
       const ft = baseD.kind === "pdf" ? "pdf" : isArchive ? "archive" : "image";
+
+      // Auto-fill manuscript number from filename (without extension) if not already set
+      const nameNoExt = file.name.replace(/\.[^.]+$/, "");
+      setInfoMap((m) => {
+        if (m[fileKey] && m[fileKey].number) return m;
+        return { ...m, [fileKey]: { ...EMPTY_INFO, ...(m[fileKey] || {}), number: nameNoExt } };
+      });
+
+      // Add/update tab
+      setTabs((prev) => {
+        const idx = prev.findIndex((t) => t.fileKey === fileKey);
+        const tabObj = { fileName: file.name, fileKey, baseDoc: baseD, doc: wrapped, pageCount: wrapped.numPages, page: 1, rulerY: 0, splitPages: false, splitFrom: 1, splitTo: baseD.numPages };
+        if (idx >= 0) {
+          const copy = [...prev];
+          copy[idx] = tabObj;
+          return copy;
+        }
+        return [...prev, tabObj];
+      });
+
       setState((s) => ({ ...s, fileName: file.name, fileKey, fileType: ft, page: 1, rulerY: 0, splitPages: false, splitFrom: 1, splitTo: baseD.numPages }));
     } catch (e) {
       console.error(e);
@@ -537,6 +611,62 @@ export default function ManuscriptRuler() {
     setInfoMap((m) => ({ ...m, [state.fileKey]: newInfo }));
     setShowInfoEditor(false);
     showToast("تم حفظ بيانات المخطوط");
+  };
+
+  const copyInfoAsTable = async () => {
+    const info = currentInfo;
+    const rows = [
+      ["عنوان المخطوط", info.title],
+      ["عناوين أخرى", info.altTitle],
+      ["المؤلف", info.author],
+      ["الناسخ", info.copyist],
+      ["تاريخ النسخ", info.copyDate],
+      ["العصر/القرن", info.era],
+      ["رقم المخطوط", info.number],
+      ["المكتبة", info.library],
+      ["الفهرسة", info.catalog],
+      ["الموضوع", info.subject],
+      ["اللغة", info.language],
+      ["نوع الخط", info.script],
+      ["عدد الأوراق", info.foliosCount],
+      ["الأبعاد", info.dimensions],
+      ["رابط التحميل", info.downloadUrl],
+      ["ملاحظات", info.notes],
+    ].filter(([, v]) => v && String(v).trim());
+    const tsv = rows.map(([k, v]) => `${k}\t${String(v).replace(/\n/g, " ")}`).join("\n");
+    const html = `<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;direction:rtl">${
+      rows.map(([k, v]) => `<tr><td><b>${escapeHtml(k)}</b></td><td>${escapeHtml(v).replace(/\n/g,"<br>")}</td></tr>`).join("")
+    }</table>`;
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        "text/plain": new Blob([tsv], { type: "text/plain" }),
+        "text/html": new Blob([html], { type: "text/html" }),
+      })]);
+      showToast("نُسخت البطاقة كجدول");
+    } catch {
+      await navigator.clipboard.writeText(tsv);
+      showToast("نُسخت البطاقة");
+    }
+  };
+
+  const copyCitation = async (comment) => {
+    const info = currentInfo;
+    const folio = formatFolio(comment.page, {
+      startFolio: state.folioStart,
+      offset: state.folioOffset,
+    });
+    // folio like "1/أ" already includes slash
+    const parts = [];
+    if (info.library) parts.push(info.library);
+    if (info.number) parts.push(info.number);
+    parts.push(`ورقة ${folio}`);
+    const citation = `(${parts.join(" ")})`;
+    try {
+      await navigator.clipboard.writeText(citation);
+      showToast("نُسخ العزو: " + citation);
+    } catch {
+      showToast("تعذّر النسخ");
+    }
   };
 
   // ---------------- Comments ----------------
@@ -1161,6 +1291,39 @@ ${sorted.length === 0
         </div>
       </div>
 
+      {tabs.length > 0 && (
+        <div className="mr-tabs" data-testid="mr-tabs">
+          {tabs.map((t, idx) => {
+            const active = t.fileKey === state.fileKey;
+            const shortName = t.fileName.length > 24 ? t.fileName.slice(0, 22) + "…" : t.fileName;
+            return (
+              <div
+                key={t.fileKey}
+                className={`mr-tab ${active ? "active" : ""}`}
+                onClick={() => !active && switchToTab(idx)}
+                data-testid="mr-tab"
+                title={t.fileName}
+              >
+                <BookOpen size={12} />
+                <span className="mr-tab-name">{shortName}</span>
+                <button
+                  className="mr-tab-close"
+                  onClick={(e) => { e.stopPropagation(); closeTab(idx); }}
+                  title="إغلاق"
+                  data-testid="mr-tab-close"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            );
+          })}
+          <button className="mr-tab-add" onClick={openFile} title="فتح مخطوط جديد" data-testid="mr-tab-add">
+            <FolderOpen size={13} />
+            مخطوط جديد
+          </button>
+        </div>
+      )}
+
       <div className="mr-viewer" data-testid="mr-viewer">
         {!hasFile && (
           <div className="mr-empty mr-fade">
@@ -1630,6 +1793,15 @@ ${sorted.length === 0
               </span>
               <button
                 className="mr-btn mr-btn-icon"
+                onClick={copyInfoAsTable}
+                title="نسخ البطاقة كجدول"
+                data-testid="mr-info-copy"
+                style={{ width: 22, height: 22 }}
+              >
+                <Copy size={12} />
+              </button>
+              <button
+                className="mr-btn mr-btn-icon"
                 onClick={() => setShowInfoEditor(true)}
                 title="تحرير البطاقة"
                 data-testid="mr-info-edit"
@@ -1756,6 +1928,15 @@ ${sorted.length === 0
                           {c.folio}{c.line ? ` · س${c.line}` : ""}
                         </button>
                         <div style={{ display: "flex", gap: 3 }}>
+                          <button
+                            className="mr-btn mr-btn-icon"
+                            style={{ width: 22, height: 22 }}
+                            onClick={() => copyCitation(c)}
+                            title="نسخ العزو (المكتبة + رقم المخطوط + ورقة)"
+                            data-testid="mr-comment-copy-citation"
+                          >
+                            <Copy size={11} />
+                          </button>
                           <button
                             className="mr-btn mr-btn-icon"
                             style={{ width: 22, height: 22 }}

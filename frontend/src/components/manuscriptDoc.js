@@ -314,10 +314,9 @@ export function toggleSplitDoc(baseDoc, split, splitRange) {
 }
 
 // ------------------- Folio numbering -------------------
-export function formatFolio(pageIndex, { startFolio = 1, offset = 0, style = "folio" } = {}) {
+export function formatFolio(pageIndex, { startFolio = 1, offset = 0, style = "folio", latin = false } = {}) {
   // pageIndex is 1-based
-  // offset is number of front pages to skip (e.g., 2 covers before manuscript starts)
-  const manuscriptIdx = pageIndex - offset; // 1-based within manuscript
+  const manuscriptIdx = pageIndex - offset;
   if (manuscriptIdx <= 0) {
     return `[غلاف ${pageIndex}]`;
   }
@@ -325,8 +324,8 @@ export function formatFolio(pageIndex, { startFolio = 1, offset = 0, style = "fo
     return `صفحة ${manuscriptIdx}`;
   }
   const folio = Math.ceil(manuscriptIdx / 2) + (startFolio - 1);
-  const side = manuscriptIdx % 2 === 1 ? "a" : "b";
-  return `${folio}${side}`;
+  const side = manuscriptIdx % 2 === 1 ? (latin ? "a" : "أ") : (latin ? "b" : "ب");
+  return `${folio}/${side}`;
 }
 
 // ------------------- Image compression export -------------------
