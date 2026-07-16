@@ -1,8 +1,8 @@
-import ManuscriptRuler from "@/components/ManuscriptRuler";
+import SplitView from "@/components/SplitView";
 import "@/App.css";
 
 function App() {
-  return <ManuscriptRuler />;
+  return <SplitView />;
 }
 
 export default App;

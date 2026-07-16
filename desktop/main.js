@@ -1,12 +1,13 @@
-const { app, BrowserWindow, Menu, shell } = require("electron");
+const { app, BrowserWindow, Menu, shell, ipcMain, desktopCapturer, dialog } = require("electron");
 const path = require("path");
+const fs = require("fs");
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 900,
-    height: 780,
-    minWidth: 380,
-    minHeight: 400,
+    width: 1280,
+    height: 820,
+    minWidth: 640,
+    minHeight: 480,
     backgroundColor: "#1a1613",
     autoHideMenuBar: true,
     title: "متصفح المخطوطات",
@@ -14,8 +15,9 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
       spellcheck: false,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
 
@@ -27,6 +29,41 @@ function createWindow() {
     return { action: "deny" };
   });
 }
+
+// ---- IPC handlers for global screen capture + saving ----
+ipcMain.handle("ms:get-sources", async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ["screen", "window"],
+    thumbnailSize: { width: 320, height: 200 },
+    fetchWindowIcons: false,
+  });
+  return sources.map((s) => ({
+    id: s.id,
+    name: s.name,
+    thumbnail: s.thumbnail && !s.thumbnail.isEmpty() ? s.thumbnail.toDataURL() : null,
+    display_id: s.display_id,
+  }));
+});
+
+ipcMain.handle("ms:choose-save-folder", async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(win, {
+    title: "اختر مجلد لحفظ اللقطات",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
+ipcMain.handle("ms:save-file", async (event, payload) => {
+  const { folder, subFolder, filename, bytes } = payload || {};
+  if (!folder || !filename) throw new Error("مسار أو اسم الملف مفقود");
+  const targetDir = subFolder ? path.join(folder, subFolder) : folder;
+  fs.mkdirSync(targetDir, { recursive: true });
+  const full = path.join(targetDir, filename);
+  fs.writeFileSync(full, Buffer.from(bytes));
+  return full;
+});
 
 app.whenReady().then(createWindow);
 

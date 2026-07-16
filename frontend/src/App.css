@@ -460,6 +460,46 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .mr-fade { animation: fadeIn 0.2s ease-out; }
 
+/* Vertical thumbnails strip */
+.mr-thumbs {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  inset-inline-start: 0;
+  width: 150px;
+  background: var(--ink-2);
+  border-inline-end: 1px solid var(--line);
+  overflow-y: auto;
+  padding: 6px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mr-thumb {
+  position: relative;
+  cursor: pointer;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  padding: 2px;
+  background: var(--ink-3);
+  transition: border-color 0.15s;
+}
+.mr-thumb:hover { border-color: var(--line); }
+.mr-thumb.active { border-color: var(--amber); }
+.mr-thumb img { width: 100%; display: block; border-radius: 2px; }
+.mr-thumb-label { text-align: center; font-size: 11px; color: var(--parchment-soft); padding: 2px; font-variant-numeric: tabular-nums; }
+.mr-thumb-markers { position: absolute; top: 3px; inset-inline-end: 3px; display: flex; gap: 2px; }
+.mr-thumb-markers .marker {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 16px; border-radius: 3px;
+  font-size: 10px; font-weight: 600; padding: 0 3px;
+  background: rgba(0,0,0,0.6); color: #fff;
+}
+.mr-thumb-markers .marker.head { background: rgba(212,162,80,0.9); color: var(--ink); }
+.mr-thumb-markers .marker.bm { background: rgba(232,72,72,0.9); }
+.mr-thumb-markers .marker.cm { background: rgba(74,144,226,0.9); }
+
 /* Manuscript Info Card (floating) */
 .mr-tabs {
   display: flex;
@@ -601,4 +641,230 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 @media (max-width: 500px) {
   .mr-brand { display: none; }
+}
+
+/* ============ SplitView ============ */
+.sv-root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--ink);
+}
+.sv-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--ink-2);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.sv-bar-label { color: var(--muted); font-size: 12px; margin-inline-end: 4px; }
+.sv-bar-hint { color: var(--muted); font-size: 11px; margin-inline-start: auto; font-style: italic; }
+.sv-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+.sv-pane {
+  min-width: 240px;
+  overflow: hidden;
+  position: relative;
+}
+.sv-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: var(--ink);
+  display: block;
+}
+.sv-divider {
+  flex: 0 0 6px;
+  cursor: ew-resize;
+  background: linear-gradient(to right, transparent, var(--line) 40%, var(--amber-2) 50%, var(--line) 60%, transparent);
+  border-inline-start: 1px solid var(--line);
+  border-inline-end: 1px solid var(--line);
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.sv-divider:hover { opacity: 1; }
+
+/* ============ WebSnipTool ============ */
+.ws-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  backdrop-filter: blur(4px);
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 30px 20px;
+  overflow-y: auto;
+}
+.ws-modal {
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  width: min(1200px, 96vw);
+  max-height: calc(100vh - 60px);
+  overflow-y: auto;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ws-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--parchment);
+  font-family: 'Amiri', serif;
+  font-size: 16px;
+}
+.ws-badge {
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--ink-3);
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  font-size: 11px;
+  margin-inline-start: 8px;
+  font-family: inherit;
+}
+.ws-error {
+  background: rgba(200,90,74,0.15);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.ws-pick { display: flex; flex-direction: column; gap: 10px; }
+.ws-sources {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.ws-source {
+  background: var(--ink-3);
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  padding: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.05s;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--parchment);
+  font-family: inherit;
+  font-size: 12px;
+}
+.ws-source:hover { border-color: var(--amber); }
+.ws-source img {
+  width: 100%;
+  height: 110px;
+  object-fit: contain;
+  background: #000;
+  border-radius: 4px;
+}
+.ws-source-name {
+  color: var(--parchment-soft);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: start;
+  padding: 0 4px;
+}
+.ws-live {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+.ws-video {
+  width: 100%;
+  max-height: 500px;
+  background: #000;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.ws-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.ws-crop {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+.ws-canvas {
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: crosshair;
+  user-select: none;
+}
+.ws-gallery {
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ws-gallery-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--parchment);
+}
+.ws-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.ws-snip {
+  position: relative;
+  background: var(--ink-3);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  aspect-ratio: 4/3;
+}
+.ws-snip img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+.ws-snip-overlay {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 3px 5px;
+  background: linear-gradient(transparent, rgba(0,0,0,0.85));
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.ws-snip-idx {
+  color: var(--amber);
+  font-weight: 700;
+  font-size: 13px;
+  background: rgba(0,0,0,0.5);
+  padding: 2px 6px;
+  border-radius: 4px;
 }

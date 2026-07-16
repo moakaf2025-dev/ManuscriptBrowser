@@ -39,7 +39,13 @@ import {
   Type,
   Pencil,
   RotateCcw,
+  List,
+  LayoutGrid,
+  Plus,
+  Camera,
+  Monitor,
 } from "lucide-react";
+import WebSnipTool from "./WebSnipTool";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
 import { buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf } from "./manuscriptDoc";
@@ -47,10 +53,24 @@ import { PDFDocument } from "pdf-lib";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `${process.env.PUBLIC_URL || ""}/pdf.worker.min.mjs`;
 
-const STORAGE_KEY = "manuscriptRulerState.v1";
-const BOOKMARKS_KEY = "manuscriptRulerBookmarks.v1";
-const COMMENTS_KEY = "manuscriptRulerComments.v1";
-const INFO_KEY = "manuscriptRulerInfo.v1";
+// Namespace via URL param (search or hash) so each iframe pane keeps its own state.
+const NS = (() => {
+  try {
+    const q = new URLSearchParams(window.location.search).get("ns");
+    if (q) return q;
+    // Also support hash-based ns (works reliably in file:// URLs)
+    const h = window.location.hash || "";
+    const m = h.match(/[#&?]ns=([A-Za-z0-9_-]+)/);
+    return m ? m[1] : "";
+  } catch { return ""; }
+})();
+const _NS_SUFFIX = NS ? "." + NS : "";
+const STORAGE_KEY = "manuscriptRulerState.v1" + _NS_SUFFIX;
+const BOOKMARKS_KEY = "manuscriptRulerBookmarks.v1" + _NS_SUFFIX;
+const COMMENTS_KEY = "manuscriptRulerComments.v1" + _NS_SUFFIX;
+const INFO_KEY = "manuscriptRulerInfo.v1" + _NS_SUFFIX;
+const HEADINGS_KEY = "manuscriptRulerHeadings.v1" + _NS_SUFFIX;
+const FOLD_OVERRIDES_KEY = "manuscriptRulerFoldOverrides.v1" + _NS_SUFFIX;
 const ZOOM_LEVELS = [0.1, 0.15, 0.2, 0.25, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 
 const DEFAULT_STATE = {
@@ -167,7 +187,14 @@ export default function ManuscriptRuler() {
   const [commentModal, setCommentModal] = useState(null); // {editingId?, page, folio, y, text}
   const [snipping, setSnipping] = useState(false);
   const [snipResult, setSnipResult] = useState(null); // {dataUrl, folio, line, filename}
-  const [tabs, setTabs] = useState([]); // [{fileName, fileKey, baseDoc, doc, pageCount, page, rulerY, splitPages, splitFrom, splitTo}]
+  const [tabs, setTabs] = useState([]);
+  const [headingsMap, setHeadingsMap] = useState(() => loadKV(HEADINGS_KEY));
+  const [foldOverridesMap, setFoldOverridesMap] = useState(() => loadKV(FOLD_OVERRIDES_KEY));
+  const [showHeadings, setShowHeadings] = useState(false);
+  const [showThumbs, setShowThumbs] = useState(false);
+  const [showWebSnip, setShowWebSnip] = useState(false);
+  const [thumbUrls, setThumbUrls] = useState([]); // dataUrls of page thumbnails for active doc
+  const [headingModal, setHeadingModal] = useState(null); // {editingId?, page, title, level}
   const [toast, setToast] = useState("");
 
   const hasFile = Boolean(doc);
@@ -266,6 +293,14 @@ export default function ManuscriptRuler() {
   useEffect(() => {
     saveKV(INFO_KEY, infoMap);
   }, [infoMap]);
+
+  useEffect(() => {
+    saveKV(HEADINGS_KEY, headingsMap);
+  }, [headingsMap]);
+
+  useEffect(() => {
+    saveKV(FOLD_OVERRIDES_KEY, foldOverridesMap);
+  }, [foldOverridesMap]);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -649,6 +684,160 @@ export default function ManuscriptRuler() {
     }
   };
 
+  // ---------------- Snip (screenshot) ----------------
+  const beginSnip = () => {
+    if (!doc) return;
+    setSnipping(true);
+    showToast("اسحب مستطيلاً على الصفحة لالتقاط لقطة");
+  };
+
+  // ---------------- Headings (TOC) ----------------
+  const currentHeadings = state.fileKey ? (headingsMap[state.fileKey] || []) : [];
+
+  const openAddHeading = () => {
+    if (!state.fileKey) return;
+    setHeadingModal({ editingId: null, page: state.page, title: "", level: 1 });
+  };
+  const openEditHeading = (h) => {
+    setHeadingModal({ editingId: h.id, page: h.page, title: h.title, level: h.level });
+  };
+  const saveHeading = (title, level) => {
+    if (!headingModal || !state.fileKey) { setHeadingModal(null); return; }
+    const t = (title || "").trim();
+    if (!t) { setHeadingModal(null); return; }
+    setHeadingsMap((m) => {
+      const list = m[state.fileKey] || [];
+      if (headingModal.editingId) {
+        return { ...m, [state.fileKey]: list.map((h) => h.id === headingModal.editingId ? { ...h, title: t, level } : h) };
+      }
+      const newH = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, page: headingModal.page, title: t, level };
+      return { ...m, [state.fileKey]: [...list, newH] };
+    });
+    setHeadingModal(null);
+    showToast(headingModal.editingId ? "تم تعديل العنوان" : "أُضيف العنوان");
+  };
+  const deleteHeading = (id) => {
+    setHeadingsMap((m) => ({ ...m, [state.fileKey]: (m[state.fileKey] || []).filter((h) => h.id !== id) }));
+  };
+  const goToHeading = (h) => {
+    setState((s) => ({ ...s, page: h.page, rulerY: 0 }));
+    setShowHeadings(false);
+  };
+
+  // ---------------- Manual fold overrides ----------------
+  const setFoldRatio = (basePage, ratio) => {
+    setFoldOverridesMap((m) => ({
+      ...m,
+      [state.fileKey]: { ...(m[state.fileKey] || {}), [basePage]: ratio },
+    }));
+  };
+
+  // ---------------- Thumbnails generation ----------------
+  const generateThumbs = async () => {
+    if (!doc) return;
+    const thumbs = [];
+    for (let i = 1; i <= pageCount; i++) {
+      const page = await doc.getPage(i);
+      const vp = page.getViewport({ scale: 1, rotation: 0 });
+      const targetW = 120;
+      const scale = targetW / vp.width;
+      const rvp = page.getViewport({ scale, rotation: 0 });
+      const off = document.createElement("canvas");
+      off.width = Math.floor(rvp.width);
+      off.height = Math.floor(rvp.height);
+      const ctx = off.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, off.width, off.height);
+      await page.render({ canvasContext: ctx, viewport: rvp }).promise;
+      thumbs.push(off.toDataURL("image/jpeg", 0.6));
+    }
+    setThumbUrls(thumbs);
+  };
+
+  useEffect(() => {
+    if (showThumbs && doc && thumbUrls.length !== pageCount) {
+      generateThumbs();
+    }
+    if (!showThumbs) setThumbUrls([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showThumbs, doc, pageCount]);
+
+  // ---------------- Export as indexed PDF with bookmarks ----------------
+  const exportAsIndexedPdf = async () => {
+    if (!doc) return;
+    setLoading(true);
+    setLoadingMsg("جارٍ إنشاء PDF مفهرس…");
+    try {
+      const { PDFDocument, PDFName, PDFDict, PDFArray, PDFRef, PDFHexString, PDFString } = await import("pdf-lib");
+      const pdfDoc = await PDFDocument.create();
+      const quality = state.exportQuality / 100;
+      const maxSize = state.exportMaxSize;
+      const pageRefs = [];
+      for (let i = 1; i <= pageCount; i++) {
+        setLoadingMsg(`تجهيز صفحة ${i} / ${pageCount}…`);
+        const page = await doc.getPage(i);
+        const vp = page.getViewport({ scale: 1, rotation: 0 });
+        const targetScale = Math.min(1, maxSize / Math.max(vp.width, vp.height));
+        const rvp = page.getViewport({ scale: targetScale, rotation: 0 });
+        const off = document.createElement("canvas");
+        off.width = Math.floor(rvp.width);
+        off.height = Math.floor(rvp.height);
+        const ctx = off.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, off.width, off.height);
+        await page.render({ canvasContext: ctx, viewport: rvp }).promise;
+        const blob = await new Promise((r) => off.toBlob(r, "image/jpeg", quality));
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const img = await pdfDoc.embedJpg(bytes);
+        const pdfPage = pdfDoc.addPage([img.width, img.height]);
+        pdfPage.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+        pageRefs.push(pdfPage.ref);
+      }
+
+      // Build outline (bookmarks) from headings
+      const headings = [...currentHeadings].sort((a, b) => a.page - b.page);
+      if (headings.length > 0) {
+        const context = pdfDoc.context;
+        const outlineDict = context.obj({ Type: "Outlines" });
+        const outlineRef = context.register(outlineDict);
+        const itemRefs = headings.map(() => context.nextRef());
+        headings.forEach((h, i) => {
+          const pageIdx = Math.max(0, Math.min(pageCount - 1, h.page - 1));
+          const item = context.obj({
+            Title: PDFHexString.fromText(h.title),
+            Parent: outlineRef,
+            Dest: [pageRefs[pageIdx], "Fit"],
+          });
+          if (i > 0) item.set(PDFName.of("Prev"), itemRefs[i - 1]);
+          if (i < headings.length - 1) item.set(PDFName.of("Next"), itemRefs[i + 1]);
+          context.assign(itemRefs[i], item);
+        });
+        outlineDict.set(PDFName.of("First"), itemRefs[0]);
+        outlineDict.set(PDFName.of("Last"), itemRefs[itemRefs.length - 1]);
+        outlineDict.set(PDFName.of("Count"), context.obj(headings.length));
+        pdfDoc.catalog.set(PDFName.of("Outlines"), outlineRef);
+        pdfDoc.catalog.set(PDFName.of("PageMode"), PDFName.of("UseOutlines"));
+      }
+
+      const bytes = await pdfDoc.save();
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const base = (currentInfo.title || state.fileName || "manuscript").replace(/\.[^.]+$/, "").replace(/[/\\?%*:|"<>]/g, "-");
+      a.download = `${base}-مفهرس.pdf`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      showToast(`تم تصدير PDF مفهرس (${headings.length} علامة)`);
+    } catch (e) {
+      console.error(e);
+      showToast("تعذّر التصدير: " + (e.message || e));
+    } finally {
+      setLoading(false);
+      setLoadingMsg("جارٍ تحميل الصفحة…");
+    }
+  };
+
   const copyCitation = async (comment) => {
     const info = currentInfo;
     const folio = formatFolio(comment.page, {
@@ -816,13 +1005,6 @@ ${sorted.length === 0
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     showToast("تم تصدير التعليقات");
-  };
-
-  // ---------------- Snip (screenshot) ----------------
-  const beginSnip = () => {
-    if (!doc) return;
-    setSnipping(true);
-    showToast("اسحب مستطيلاً على الصفحة لالتقاط لقطة");
   };
 
   const performSnip = async (rect) => {
@@ -1221,6 +1403,37 @@ ${sorted.length === 0
           data-testid="mr-btn-snip"
         >
           <Scissors size={18} />
+        </button>
+
+        <button
+          className={`mr-btn mr-btn-icon ${showHeadings ? "mr-btn-active" : ""}`}
+          onClick={() => setShowHeadings((v) => !v)}
+          disabled={!hasFile}
+          title="فهرس/عناوين المخطوط"
+          data-testid="mr-btn-headings"
+        >
+          <List size={18} />
+          {currentHeadings.length > 0 && <span style={{ fontSize: 11, marginInlineStart: 2 }}>{currentHeadings.length}</span>}
+        </button>
+
+        <button
+          className={`mr-btn mr-btn-icon ${showThumbs ? "mr-btn-active" : ""}`}
+          onClick={() => setShowThumbs((v) => !v)}
+          disabled={!hasFile}
+          title="شريط مصغّرات الصفحات"
+          data-testid="mr-btn-thumbs"
+        >
+          <LayoutGrid size={18} />
+        </button>
+
+        <button
+          className="mr-btn mr-btn-icon"
+          onClick={() => setShowWebSnip(true)}
+          title="التقاط لقطات من أي نافذة/شاشة وحفظها كـPDF"
+          data-testid="mr-btn-web-snip"
+          style={{ color: "var(--amber)" }}
+        >
+          <Monitor size={18} />
         </button>
 
         <button
@@ -1716,6 +1929,50 @@ ${sorted.length === 0
                 إجمالي صفحات الملف الأصلي: <b style={{ color: "var(--parchment)" }}>{baseDoc.numPages}</b>
               </div>
             )}
+
+            {state.splitPages && baseDoc && (
+              <>
+                <h3 style={{ marginTop: 6 }}>ضبط يدوي لخط الطي</h3>
+                <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "6px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.6 }}>
+                  إذا فشل الكشف الذكي لخط الطي في الصفحة الأصلية الحالية، يمكنك ضبط موضع القص يدوياً. القيمة 50% تعني منتصف الصفحة تماماً.
+                </div>
+                {(() => {
+                  const activeBasePage = Math.ceil(state.page / 2);
+                  const overrides = foldOverridesMap[state.fileKey] || {};
+                  const current = overrides[activeBasePage];
+                  const displayVal = current != null ? Math.round(current * 100) : 50;
+                  return (
+                    <div className="mr-field">
+                      <label>موضع القص للورقة {activeBasePage} <span className="val">{displayVal}%</span></label>
+                      <input type="range" min="20" max="80" value={displayVal}
+                        onChange={(e) => {
+                          const v = Number(e.target.value) / 100;
+                          setFoldRatio(activeBasePage, v);
+                          // trigger re-render by forcing doc reload
+                          if (baseDoc && state.splitPages) {
+                            const range = { from: state.splitFrom, to: Math.min(state.splitTo, baseDoc.numPages) };
+                            const wrapped = toggleSplitDoc(baseDoc, true, range);
+                            // Inject override lookup into wrapped
+                            const origGetPage = wrapped.getPage.bind(wrapped);
+                            wrapped.getPage = async (n) => {
+                              const p = await origGetPage(n);
+                              if (p._foldRatio != null) {
+                                const bp = Math.ceil((n - state.splitFrom + 1) / 2) + state.splitFrom - 1;
+                                const o = (foldOverridesMap[state.fileKey] || {})[bp];
+                                if (o != null) p._foldRatio = o;
+                              }
+                              return p;
+                            };
+                            setDoc(wrapped);
+                          }
+                        }}
+                        data-testid="mr-fold-manual"
+                      />
+                    </div>
+                  );
+                })()}
+              </>
+            )}
           </div>
         )}
 
@@ -2013,6 +2270,70 @@ ${sorted.length === 0
           />
         )}
 
+        {showHeadings && (
+          <div className="mr-settings mr-fade" data-testid="mr-headings-panel" style={{ inset: "auto 10px 10px auto", top: 60, width: 340 }}>
+            <h3>الفهرس والعناوين ({currentHeadings.length})
+              <button className="mr-btn mr-btn-icon" onClick={() => setShowHeadings(false)} style={{ float: "left" }}><X size={14} /></button>
+            </h3>
+            <button className="mr-btn mr-btn-primary" onClick={openAddHeading} style={{ justifyContent: "center" }} data-testid="mr-headings-add">
+              <Plus size={14} /> إضافة عنوان عند الصفحة الحالية
+            </button>
+            {currentHeadings.length === 0 && (
+              <p style={{ color: "var(--muted)", fontSize: 12, margin: "8px 0 0" }}>لا توجد عناوين بعد. عناوين المخطوط (فصول، أبواب…) تُصدَّر كإشارات مرجعية داخل ملف PDF.</p>
+            )}
+            {currentHeadings.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 260, overflowY: "auto" }}>
+                {[...currentHeadings].sort((a,b) => a.page - b.page).map((h) => (
+                  <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", background: "var(--ink-3)", border: "1px solid var(--line)", borderRadius: 6, fontSize: 13 }} data-testid="mr-heading-item">
+                    <button className="mr-btn" style={{ flex: 1, justifyContent: "flex-start", padding: "3px 8px", paddingInlineStart: h.level * 12 }} onClick={() => goToHeading(h)}>
+                      <span style={{ color: "var(--amber)", fontSize: 11 }}>ص{h.page}</span>
+                      <span>{h.title}</span>
+                    </button>
+                    <button className="mr-btn mr-btn-icon" style={{ width: 22, height: 22 }} onClick={() => openEditHeading(h)}><Edit3 size={11} /></button>
+                    <button className="mr-btn mr-btn-icon" style={{ width: 22, height: 22 }} onClick={() => deleteHeading(h.id)}><Trash2 size={11} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button className="mr-btn" onClick={exportAsIndexedPdf} style={{ justifyContent: "center", marginTop: 6 }} data-testid="mr-export-indexed-pdf">
+              <FileText size={14} /> تصدير PDF مفهرس (مع bookmarks)
+            </button>
+          </div>
+        )}
+
+        {headingModal && (
+          <HeadingModal initial={headingModal} onCancel={() => setHeadingModal(null)} onSave={saveHeading} />
+        )}
+
+        {/* Vertical thumbnails strip */}
+        {showThumbs && hasFile && (
+          <div className="mr-thumbs" data-testid="mr-thumbs-strip">
+            {thumbUrls.length === 0 && (
+              <div style={{ padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>جارٍ إنشاء المصغّرات…</div>
+            )}
+            {thumbUrls.map((url, i) => {
+              const pg = i + 1;
+              const isActive = pg === state.page;
+              const hasBookmark = currentBookmarks.some((b) => b.page === pg);
+              const hasComment = currentComments.some((c) => c.page === pg);
+              const hasHeading = currentHeadings.some((h) => h.page === pg);
+              return (
+                <div key={i} className={`mr-thumb ${isActive ? "active" : ""}`} onClick={() => setState((s) => ({ ...s, page: pg, rulerY: 0 }))} data-testid="mr-thumb">
+                  <img src={url} alt={`page ${pg}`} />
+                  <div className="mr-thumb-label">
+                    {state.folioMode ? formatFolio(pg, { startFolio: state.folioStart, offset: state.folioOffset }) : pg}
+                  </div>
+                  <div className="mr-thumb-markers">
+                    {hasHeading && <span className="marker head" title="عنوان">H</span>}
+                    {hasBookmark && <span className="marker bm" title="علامة">★</span>}
+                    {hasComment && <span className="marker cm" title="تعليق">💬</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {loading && <div className="mr-loading" data-testid="mr-loading">{loadingMsg}</div>}
         {toast && <div className="mr-toast" data-testid="mr-toast">{toast}</div>}
 
@@ -2021,6 +2342,13 @@ ${sorted.length === 0
             initialLabel={bookmarkModal.label}
             onCancel={() => setBookmarkModal(null)}
             onConfirm={confirmBookmark}
+          />
+        )}
+
+        {showWebSnip && (
+          <WebSnipTool
+            onClose={() => setShowWebSnip(false)}
+            onToast={showToast}
           />
         )}
       </div>
@@ -2217,6 +2545,42 @@ function InfoEditorModal({ initial, onSave, onCancel }) {
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
           <button className="mr-btn" onClick={onCancel} data-testid="mr-info-cancel">إلغاء</button>
           <button className="mr-btn mr-btn-primary" onClick={() => onSave(f)} data-testid="mr-info-save"><Save size={13} /> حفظ</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HeadingModal({ initial, onSave, onCancel }) {
+  const [title, setTitle] = React.useState(initial?.title || "");
+  const [level, setLevel] = React.useState(initial?.level || 1);
+  const inputRef = React.useRef(null);
+  React.useEffect(() => { const t = setTimeout(() => inputRef.current?.focus(), 40); return () => clearTimeout(t); }, []);
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); onCancel(); }
+      if (e.key === "Enter" && !e.shiftKey) { e.stopPropagation(); onSave(title, level); }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [title, level, onSave, onCancel]);
+  return (
+    <div className="mr-shortcuts-panel" onClick={onCancel} data-testid="mr-heading-modal">
+      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+        <h2 style={{ fontSize: 20 }}>{initial?.editingId ? "تعديل العنوان" : "إضافة عنوان"}<span style={{ fontSize: 13, color: "var(--amber)", marginInlineStart: 12 }}>الصفحة {initial?.page}</span></h2>
+        <div className="mr-field">
+          <label>نص العنوان</label>
+          <input ref={inputRef} type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="مثلاً: الباب الأول - في التعريفات" data-testid="mr-heading-input"
+            style={{ padding: "8px 10px", borderRadius: 6, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontFamily: "inherit", fontSize: 14, width: "100%" }} />
+        </div>
+        <div className="mr-field">
+          <label>مستوى العنوان (1 = رئيسي، 2 = فرعي…)</label>
+          <input type="number" min="1" max="4" value={level} onChange={(e) => setLevel(Math.max(1, Math.min(4, Number(e.target.value) || 1)))}
+            style={{ padding: "6px 10px", borderRadius: 6, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontFamily: "inherit", fontSize: 14, width: 100 }} />
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="mr-btn" onClick={onCancel}>إلغاء</button>
+          <button className="mr-btn mr-btn-primary" onClick={() => onSave(title, level)} data-testid="mr-heading-save"><Save size={13} /> حفظ</button>
         </div>
       </div>
     </div>
@@ -2548,10 +2912,8 @@ function SnipPreview({ snip, onClose, onSave, onCopy }) {
         </h2>
 
         <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
-          {toolBtn("highlight", Highlighter, "إبراز")}
           {toolBtn("rect", Square, "إطار")}
           {toolBtn("arrow", ArrowUpRight, "سهم")}
-          {toolBtn("text", Type, "نص")}
           {toolBtn("freehand", Pencil, "قلم حر")}
 
           <div style={{ display: "flex", gap: 4, alignItems: "center", marginInlineStart: 10 }}>
@@ -2580,7 +2942,7 @@ function SnipPreview({ snip, onClose, onSave, onCopy }) {
             <input type="range" min="1" max="16" value={strokeWidth} onChange={(e) => setStrokeWidth(Number(e.target.value))} data-testid="mr-snip-stroke" style={{ width: 80 }} />
           </div>
 
-          {tool === "text" && (
+          {tool === "text" && false && (
             <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
               <span style={{ fontSize: 11, color: "var(--muted)" }}>حجم الخط:</span>
               <input type="number" min="10" max="80" value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} style={{ width: 55, padding: "2px 6px", borderRadius: 4, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontSize: 12 }} />
