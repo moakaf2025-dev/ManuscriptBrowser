@@ -42,10 +42,7 @@ import {
   List,
   LayoutGrid,
   Plus,
-  Camera,
-  Monitor,
 } from "lucide-react";
-import WebSnipTool from "./WebSnipTool";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
 import { buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf } from "./manuscriptDoc";
@@ -192,7 +189,6 @@ export default function ManuscriptRuler() {
   const [foldOverridesMap, setFoldOverridesMap] = useState(() => loadKV(FOLD_OVERRIDES_KEY));
   const [showHeadings, setShowHeadings] = useState(false);
   const [showThumbs, setShowThumbs] = useState(false);
-  const [showWebSnip, setShowWebSnip] = useState(false);
   const [thumbUrls, setThumbUrls] = useState([]); // dataUrls of page thumbnails for active doc
   const [headingModal, setHeadingModal] = useState(null); // {editingId?, page, title, level}
   const [toast, setToast] = useState("");
@@ -1428,16 +1424,6 @@ ${sorted.length === 0
 
         <button
           className="mr-btn mr-btn-icon"
-          onClick={() => setShowWebSnip(true)}
-          title="التقاط لقطات من أي نافذة/شاشة وحفظها كـPDF"
-          data-testid="mr-btn-web-snip"
-          style={{ color: "var(--amber)" }}
-        >
-          <Monitor size={18} />
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
           onClick={toggleFullscreen}
           title="ملء الشاشة (F11)"
           data-testid="mr-btn-fullscreen"
@@ -2362,13 +2348,6 @@ ${sorted.length === 0
             initialLabel={bookmarkModal.label}
             onCancel={() => setBookmarkModal(null)}
             onConfirm={confirmBookmark}
-          />
-        )}
-
-        {showWebSnip && (
-          <WebSnipTool
-            onClose={() => setShowWebSnip(false)}
-            onToast={showToast}
           />
         )}
       </div>
