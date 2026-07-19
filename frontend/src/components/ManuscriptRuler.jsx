@@ -42,6 +42,11 @@ import {
   List,
   LayoutGrid,
   Plus,
+  ChevronDown,
+  Sliders,
+  Play,
+  Pause,
+  Ruler,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
@@ -68,7 +73,7 @@ const COMMENTS_KEY = "manuscriptRulerComments.v1" + _NS_SUFFIX;
 const INFO_KEY = "manuscriptRulerInfo.v1" + _NS_SUFFIX;
 const HEADINGS_KEY = "manuscriptRulerHeadings.v1" + _NS_SUFFIX;
 const FOLD_OVERRIDES_KEY = "manuscriptRulerFoldOverrides.v1" + _NS_SUFFIX;
-const ZOOM_LEVELS = [0.1, 0.15, 0.2, 0.25, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
+const ZOOM_LEVELS = [0.1, 0.15, 0.2, 0.25, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10];
 
 const DEFAULT_STATE = {
   fileName: "",
@@ -79,24 +84,36 @@ const DEFAULT_STATE = {
   rotation: 0,
   rulerY: 100,
   rulerHeight: 32,
+  rulerWidth: 100,        // % of page width (10-100)
+  rulerAlign: "center",   // "start" | "center" | "end"
   rulerStep: 32,
   rulerColor: "#f2c14e",
   rulerOpacity: 0.42,
   rulerVisible: true,
+  rulerShape: "band",     // "band" | "line" | "parallelogram"
+  rulerTilt: 0,           // degrees -15..+15
+  rulerAutoSpeed: 0,      // px/sec (0 = paused)
+  rulerAutoPlaying: false,
   dimAlpha: 0.28,
   dimEnabled: true,
   brightness: 100,
   contrast: 100,
+  saturate: 100,
+  sharpen: 0,             // 0..100 (pixel-level unsharp mask)
+  denoise: 0,             // 0..100 (box blur)
   invert: false,
+  invertR: false,
+  invertG: false,
+  invertB: false,
   splitPages: false,
   splitFrom: 1,
   splitTo: 999,
-  folioMode: true,        // when true, show as 1a/1b instead of "صفحة 1"
-  folioStart: 1,          // starting folio number
-  folioOffset: 0,         // number of front pages before manuscript begins
+  folioMode: true,
+  folioStart: 1,
+  folioOffset: 0,
   exportMaxSize: 2000,
   exportQuality: 82,
-  exportFormat: "zip",    // "zip" | "pdf"
+  exportFormat: "zip",
 };
 
 function loadState() {
@@ -142,24 +159,45 @@ function saveKV(key, data) {
   localStorage.setItem(key, JSON.stringify(data));
 }
 
+const RECENTS_KEY = "manuscriptRulerRecents.v1" + _NS_SUFFIX;
+const AUTO_BM_KEY = "manuscriptRulerAutoBM.v1" + _NS_SUFFIX;
+
 const EMPTY_INFO = {
-  title: "",
-  altTitle: "",
-  author: "",
-  copyist: "",
-  copyDate: "",
-  era: "",
-  number: "",
-  library: "",
-  catalog: "",
-  language: "العربية",
-  script: "",
-  subject: "",
-  foliosCount: "",
-  dimensions: "",
-  downloadUrl: "",
-  notes: "",
+  type: "single",     // "single" | "collection"
+  number: "",         // manuscript number (auto from filename)
+  library: "",        // library name (auto from filename if present)
+  title: "",          // used in single mode
+  author: "",         // used in single mode
+  copyist: "",        // used in single mode
+  copyDate: "",       // used in single mode
+  titlesList: "",     // used in collection mode
+  notes: "",          // both modes
 };
+
+// Parse filename → {library, number}
+// If filename has a name + number pattern like "الأزهر 325425" or "Cairo 12/3",
+// treat first non-digit token(s) as library and digit portion as number.
+function parseFilenameForCard(nameNoExt) {
+  const s = String(nameNoExt || "").trim();
+  if (!s) return { library: "", number: "" };
+  // Extract the last space-separated token that contains digits
+  const tokens = s.split(/\s+/);
+  if (tokens.length === 1) {
+    // Only one token: if all-digits it's the number, else keep whole as number
+    return { library: "", number: tokens[0] };
+  }
+  // Find token(s) that contain digits, from the end
+  let numIdx = -1;
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    if (/\d/.test(tokens[i])) { numIdx = i; break; }
+  }
+  if (numIdx <= 0) {
+    return { library: "", number: s };
+  }
+  const number = tokens.slice(numIdx).join(" ");
+  const library = tokens.slice(0, numIdx).join(" ");
+  return { library, number };
+}
 
 export default function ManuscriptRuler() {
   const [state, setState] = useState(loadState);
@@ -189,7 +227,14 @@ export default function ManuscriptRuler() {
   const [foldOverridesMap, setFoldOverridesMap] = useState(() => loadKV(FOLD_OVERRIDES_KEY));
   const [showHeadings, setShowHeadings] = useState(false);
   const [showThumbs, setShowThumbs] = useState(false);
-  const [thumbUrls, setThumbUrls] = useState([]); // dataUrls of page thumbnails for active doc
+  const [thumbUrls, setThumbUrls] = useState([]);
+  // New: grouped-toolbar popover states
+  const [openGroup, setOpenGroup] = useState(null); // 'open' | 'card' | 'browse' | 'number' | 'ruler' | 'comment' | 'export' | null
+  const [numberStep, setNumberStep] = useState(1); // 1..3 wizard
+  const [recentFiles, setRecentFiles] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]"); } catch { return []; }
+  });
+  const [thumbsDirection, setThumbsDirection] = useState("vertical"); // 'vertical' | 'horizontal'
   const [headingModal, setHeadingModal] = useState(null); // {editingId?, page, title, level}
   const [toast, setToast] = useState("");
 
@@ -263,6 +308,7 @@ export default function ManuscriptRuler() {
   const zoomInRef = useRef(() => {});
   const zoomOutRef = useRef(() => {});
   const openAddCommentRef = useRef(() => {});
+  const openAddHeadingRef = useRef(() => {});
   const snipRef = useRef(() => {});
 
   useEffect(() => {
@@ -325,17 +371,49 @@ export default function ManuscriptRuler() {
       setPageCount(wrapped.numPages);
       const ft = baseD.kind === "pdf" ? "pdf" : isArchive ? "archive" : "image";
 
-      // Auto-fill manuscript number from filename (without extension) if not already set
+      // Auto-fill library + number from filename when card is empty
       const nameNoExt = file.name.replace(/\.[^.]+$/, "");
+      const parsed = parseFilenameForCard(nameNoExt);
       setInfoMap((m) => {
-        if (m[fileKey] && m[fileKey].number) return m;
-        return { ...m, [fileKey]: { ...EMPTY_INFO, ...(m[fileKey] || {}), number: nameNoExt } };
+        if (m[fileKey] && (m[fileKey].number || m[fileKey].library)) return m;
+        return {
+          ...m,
+          [fileKey]: {
+            ...EMPTY_INFO,
+            ...(m[fileKey] || {}),
+            number: parsed.number,
+            library: parsed.library,
+          },
+        };
       });
+
+      // Update recents (last 5 fileKeys → names)
+      try {
+        const raw = localStorage.getItem(RECENTS_KEY);
+        const recents = raw ? JSON.parse(raw) : [];
+        const filtered = recents.filter((r) => r.fileKey !== fileKey);
+        const next = [{ fileKey, name: file.name, at: Date.now() }, ...filtered].slice(0, 5);
+        localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+      } catch { /* noop */ }
+
+      // Restore auto-bookmark if exists
+      let restoredPage = 1;
+      let restoredY = 0;
+      try {
+        const raw = localStorage.getItem(AUTO_BM_KEY);
+        if (raw) {
+          const map = JSON.parse(raw);
+          if (map[fileKey]) {
+            restoredPage = Math.min(wrapped.numPages, Math.max(1, map[fileKey].page || 1));
+            restoredY = map[fileKey].y || 0;
+          }
+        }
+      } catch { /* noop */ }
 
       // Add/update tab
       setTabs((prev) => {
         const idx = prev.findIndex((t) => t.fileKey === fileKey);
-        const tabObj = { fileName: file.name, fileKey, baseDoc: baseD, doc: wrapped, pageCount: wrapped.numPages, page: 1, rulerY: 0, splitPages: false, splitFrom: 1, splitTo: baseD.numPages };
+        const tabObj = { fileName: file.name, fileKey, baseDoc: baseD, doc: wrapped, pageCount: wrapped.numPages, page: restoredPage, rulerY: restoredY, splitPages: false, splitFrom: 1, splitTo: baseD.numPages };
         if (idx >= 0) {
           const copy = [...prev];
           copy[idx] = tabObj;
@@ -344,7 +422,7 @@ export default function ManuscriptRuler() {
         return [...prev, tabObj];
       });
 
-      setState((s) => ({ ...s, fileName: file.name, fileKey, fileType: ft, page: 1, rulerY: 0, splitPages: false, splitFrom: 1, splitTo: baseD.numPages }));
+      setState((s) => ({ ...s, fileName: file.name, fileKey, fileType: ft, page: restoredPage, rulerY: restoredY, splitPages: false, splitFrom: 1, splitTo: baseD.numPages }));
     } catch (e) {
       console.error(e);
       showToast(e.message || "تعذّر فتح الملف");
@@ -379,6 +457,35 @@ export default function ManuscriptRuler() {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, viewport.width, viewport.height);
         await page.render({ canvasContext: ctx, viewport }).promise;
+        // Apply pixel-level filters: RGB channel inverts + sharpen + denoise
+        try {
+          const st = stateRef.current;
+          const needsChannelInvert = st.invertR || st.invertG || st.invertB;
+          const needsSharpen = (st.sharpen || 0) > 0;
+          const needsDenoise = (st.denoise || 0) > 0;
+          if (needsChannelInvert || needsSharpen || needsDenoise) {
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const d = imgData.data;
+            if (needsChannelInvert) {
+              for (let i = 0; i < d.length; i += 4) {
+                if (st.invertR) d[i] = 255 - d[i];
+                if (st.invertG) d[i + 1] = 255 - d[i + 1];
+                if (st.invertB) d[i + 2] = 255 - d[i + 2];
+              }
+            }
+            if (needsDenoise) {
+              // Simple 3x3 box blur, strength scaled 0..1
+              const strength = st.denoise / 100;
+              boxBlur3x3(d, canvas.width, canvas.height, strength);
+            }
+            if (needsSharpen) {
+              // 3x3 unsharp mask kernel, strength 0..1
+              const strength = st.sharpen / 100;
+              sharpen3x3(d, canvas.width, canvas.height, strength);
+            }
+            ctx.putImageData(imgData, 0, 0);
+          }
+        } catch (err) { /* ignore filter errors */ }
         setPageSize({ w: viewport.width, h: viewport.height });
       } catch (e) {
         console.error(e);
@@ -393,6 +500,60 @@ export default function ManuscriptRuler() {
   useEffect(() => {
     if (doc) renderPage(state.page);
   }, [doc, state.page, state.rotation, state.zoomIdx, renderPage]);
+
+  // Auto-bookmark: save current position on unload / tab hide
+  useEffect(() => {
+    const persist = () => {
+      if (!state.fileKey) return;
+      try {
+        const raw = localStorage.getItem(AUTO_BM_KEY);
+        const map = raw ? JSON.parse(raw) : {};
+        map[state.fileKey] = { page: state.page, y: state.rulerY, at: Date.now() };
+        localStorage.setItem(AUTO_BM_KEY, JSON.stringify(map));
+      } catch { /* noop */ }
+    };
+    window.addEventListener("beforeunload", persist);
+    window.addEventListener("pagehide", persist);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") persist();
+    });
+    return () => {
+      window.removeEventListener("beforeunload", persist);
+      window.removeEventListener("pagehide", persist);
+    };
+  }, [state.fileKey, state.page, state.rulerY]);
+
+  // Refresh recents whenever storage changes locally
+  useEffect(() => {
+    try { setRecentFiles(JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]")); } catch { /* noop */ }
+  }, [state.fileKey]);
+
+  // Ruler auto-scroll effect
+  useEffect(() => {
+    if (!state.rulerAutoPlaying || !state.rulerAutoSpeed || !hasFile) return;
+    let raf;
+    let last = performance.now();
+    const tick = (now) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      setState((s) => {
+        const maxY = Math.max(0, pageSizeRef.current.h - s.rulerHeight);
+        const nextY = s.rulerY + s.rulerAutoSpeed * dt;
+        if (nextY >= maxY) {
+          // reach bottom → advance page or stop
+          if (s.page < pageCount) {
+            return { ...s, page: s.page + 1, rulerY: 0 };
+          }
+          return { ...s, rulerAutoPlaying: false };
+        }
+        return { ...s, rulerY: nextY };
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.rulerAutoPlaying, state.rulerAutoSpeed, hasFile, pageCount]);
 
   // Scroll viewer to top whenever page changes
   useEffect(() => {
@@ -646,27 +807,23 @@ export default function ManuscriptRuler() {
 
   const copyInfoAsTable = async () => {
     const info = currentInfo;
-    const rows = [
-      ["عنوان المخطوط", info.title],
-      ["عناوين أخرى", info.altTitle],
-      ["المؤلف", info.author],
-      ["الناسخ", info.copyist],
-      ["تاريخ النسخ", info.copyDate],
-      ["العصر/القرن", info.era],
-      ["رقم المخطوط", info.number],
-      ["المكتبة", info.library],
-      ["الفهرسة", info.catalog],
-      ["الموضوع", info.subject],
-      ["اللغة", info.language],
-      ["نوع الخط", info.script],
-      ["عدد الأوراق", info.foliosCount],
-      ["الأبعاد", info.dimensions],
-      ["رابط التحميل", info.downloadUrl],
-      ["ملاحظات", info.notes],
-    ].filter(([, v]) => v && String(v).trim());
-    const tsv = rows.map(([k, v]) => `${k}\t${String(v).replace(/\n/g, " ")}`).join("\n");
+    const rows = [];
+    rows.push(["رقم النسخة", info.number]);
+    rows.push(["المكتبة", info.library]);
+    if ((info.type || "single") === "single") {
+      rows.push(["عنوان المخطوط", info.title]);
+      rows.push(["المؤلف", info.author]);
+      rows.push(["الناسخ", info.copyist]);
+      rows.push(["تاريخ النسخ", info.copyDate]);
+    } else {
+      rows.push(["نوع المخطوط", "مجموع"]);
+      if (info.titlesList) rows.push(["عناوين المجموع", info.titlesList]);
+    }
+    if (info.notes) rows.push(["ملاحظات ووصف", info.notes]);
+    const filtered = rows.filter(([, v]) => v && String(v).trim());
+    const tsv = filtered.map(([k, v]) => `${k}\t${String(v).replace(/\n/g, " ")}`).join("\n");
     const html = `<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;direction:rtl">${
-      rows.map(([k, v]) => `<tr><td><b>${escapeHtml(k)}</b></td><td>${escapeHtml(v).replace(/\n/g,"<br>")}</td></tr>`).join("")
+      filtered.map(([k, v]) => `<tr><td><b>${escapeHtml(k)}</b></td><td>${escapeHtml(v).replace(/\n/g,"<br>")}</td></tr>`).join("")
     }</table>`;
     try {
       await navigator.clipboard.write([new ClipboardItem({
@@ -922,6 +1079,37 @@ export default function ManuscriptRuler() {
     setShowComments(false);
   };
 
+  const exportHeadingsAsWord = () => {
+    if (!currentHeadings.length) {
+      showToast("لا توجد عناوين لتصديرها");
+      return;
+    }
+    const info = currentInfo;
+    const sorted = [...currentHeadings].sort((a, b) => a.page - b.page);
+    const rows = sorted.map((h, i) => {
+      const folio = formatFolio(h.page, { startFolio: state.folioStart, offset: state.folioOffset });
+      const indent = "&nbsp;".repeat((h.level - 1) * 4);
+      return `<tr><td>${i + 1}</td><td>${escapeHtml(folio)}</td><td>${indent}${escapeHtml(h.title)}</td><td>${h.level}</td></tr>`;
+    }).join("\n");
+    const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8" />
+<title>عناوين المخطوط - ${escapeHtml(info.title || state.fileName || "بدون عنوان")}</title>
+<style>body{font-family:'Traditional Arabic','Amiri','Noto Naskh Arabic',serif;font-size:14pt;line-height:1.8;padding:30px}h1{font-size:22pt;border-bottom:2px solid #333;padding-bottom:10px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px 10px;text-align:right}th{background:#eee}</style></head>
+<body><h1>عناوين المخطوط</h1>
+<p><b>المكتبة:</b> ${escapeHtml(info.library || "-")} — <b>رقم النسخة:</b> ${escapeHtml(info.number || "-")}</p>
+${info.title ? `<p><b>العنوان:</b> ${escapeHtml(info.title)}</p>` : ""}
+<table><thead><tr><th>#</th><th>الورقة</th><th>العنوان</th><th>المستوى</th></tr></thead><tbody>${rows}</tbody></table>
+</body></html>`;
+    const blob = new Blob(["\ufeff" + html], { type: "application/msword;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const base = (info.title || state.fileName || "manuscript").replace(/\.[^.]+$/, "").replace(/[/\\?%*:|"<>]/g, "-");
+    a.download = `${base}-عناوين.doc`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showToast("تم تصدير العناوين");
+  };
+
   const exportCommentsAsWord = () => {
     if (!currentComments.length && !hasInfoFilled(currentInfo)) {
       showToast("لا توجد بيانات لتصديرها");
@@ -1084,12 +1272,17 @@ ${sorted.length === 0
       }
       if (e.ctrlKey && e.key.toLowerCase() === "b") {
         e.preventDefault();
-        if (hasFileRef.current) addBookmarkRef.current();
+        if (hasFileRef.current) openAddHeadingRef.current();
         return;
       }
       if (e.ctrlKey && e.key.toLowerCase() === "g") {
         e.preventDefault();
         if (hasFileRef.current) setShowBookmarks((v) => !v);
+        return;
+      }
+      if (e.ctrlKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        if (hasFileRef.current) openAddCommentRef.current();
         return;
       }
       if (e.ctrlKey && e.key.toLowerCase() === "m") {
@@ -1098,6 +1291,11 @@ ${sorted.length === 0
         return;
       }
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (hasFileRef.current) snipRef.current();
+        return;
+      }
+      if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "s") {
         e.preventDefault();
         if (hasFileRef.current) snipRef.current();
         return;
@@ -1230,6 +1428,7 @@ ${sorted.length === 0
 
   useEffect(() => {
     openAddCommentRef.current = openAddComment;
+    openAddHeadingRef.current = openAddHeading;
     snipRef.current = beginSnip;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.fileKey, state.page, state.rulerY, state.rulerStep, state.folioMode, state.folioStart, state.folioOffset, doc]);
@@ -1245,182 +1444,345 @@ ${sorted.length === 0
         data-testid="mr-file-input"
       />
 
-      <div className="mr-topbar" data-testid="mr-topbar">
+      <div className="mr-topbar mr-topbar-v2" data-testid="mr-topbar">
         <div className="mr-brand">
           <div className="mr-brand-mark">م</div>
           <div className="mr-brand-name">متصفح المخطوطات</div>
         </div>
 
-        <button className="mr-btn mr-btn-primary" onClick={openFile} data-testid="mr-btn-open">
-          <FolderOpen size={18} />
-          فتح ملف
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={zoomOut}
-          disabled={!hasFile}
-          title="تصغير (Ctrl -)"
-          data-testid="mr-btn-zoom-out"
-        >
-          <ZoomOut size={18} />
-        </button>
-        <span className="mr-info-chip" data-testid="mr-zoom-label">{Math.round(scale * 100)}%</span>
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={zoomIn}
-          disabled={!hasFile}
-          title="تكبير (Ctrl +)"
-          data-testid="mr-btn-zoom-in"
-        >
-          <ZoomIn size={18} />
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={rotate}
-          disabled={!hasFile}
-          title="تدوير (R)"
-          data-testid="mr-btn-rotate"
-        >
-          <RotateCw size={18} />
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={toggleRuler}
-          disabled={!hasFile}
-          title="إظهار/إخفاء المسطرة (H)"
-          data-testid="mr-btn-toggle-ruler"
-        >
-          {state.rulerVisible ? <Eye size={18} /> : <EyeOff size={18} />}
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={() => setShowSettings((v) => !v)}
-          title="إعدادات المسطرة"
-          data-testid="mr-btn-settings"
-        >
-          <Settings size={18} />
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={() => hasFile && addBookmark()}
-          disabled={!hasFile}
-          title="إضافة علامة مرجعية (Ctrl+B)"
-          data-testid="mr-btn-add-bookmark"
-        >
-          <BookmarkPlus size={18} />
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={() => setShowBookmarks((v) => !v)}
-          disabled={!hasFile}
-          title="قائمة العلامات المرجعية (Ctrl+G)"
-          data-testid="mr-btn-bookmarks"
-        >
-          <Bookmark size={18} />
-          {currentBookmarks.length > 0 && (
-            <span style={{ fontSize: 11, marginInlineStart: 2 }}>{currentBookmarks.length}</span>
+        {/* 1. فتح المخطوط */}
+        <div className="mr-group">
+          <button
+            className="mr-gbtn mr-gbtn-primary"
+            onClick={openFile}
+            data-testid="mr-btn-open"
+            title="فتح ملف (Ctrl+O)"
+          >
+            <FolderOpen size={22} />
+            <span>فتح مخطوط</span>
+          </button>
+          <button
+            className="mr-gbtn-arrow"
+            onClick={() => setOpenGroup(openGroup === "open" ? null : "open")}
+            title="آخر المخطوطات المفتوحة"
+            data-testid="mr-btn-open-arrow"
+          >
+            <ChevronDown size={14} />
+          </button>
+          {openGroup === "open" && (
+            <div className="mr-popover" data-testid="mr-pop-open">
+              <div className="mr-pop-title">آخر المخطوطات ({recentFiles.length}):</div>
+              {recentFiles.length === 0 && <div className="mr-pop-empty">لا توجد ملفات سابقة</div>}
+              {recentFiles.slice(0, 5).map((r) => (
+                <div key={r.fileKey} className="mr-pop-item" data-testid="mr-pop-recent">
+                  <FileText size={13} />
+                  <span title={r.name}>{r.name.length > 34 ? r.name.slice(0, 32) + "…" : r.name}</span>
+                </div>
+              ))}
+              <div className="mr-pop-hint">اضغط «فتح مخطوط» أعلاه لاختيار ملف جديد. أسماء الملفات السابقة تظهر هنا للتذكير.</div>
+            </div>
           )}
-        </button>
+        </div>
 
-        <button
-          className={`mr-btn mr-btn-icon ${state.splitPages ? "mr-btn-active" : ""}`}
-          onClick={toggleSplit}
-          disabled={!hasFile}
-          title="تقسيم الصفحة المزدوجة (كشف تلقائي للطي)"
-          data-testid="mr-btn-split"
-        >
-          <SplitSquareHorizontal size={18} />
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={() => setShowFolioSettings((v) => !v)}
-          disabled={!hasFile}
-          title="ترقيم المخطوطات (a/b)"
-          data-testid="mr-btn-folio"
-        >
-          <Hash size={18} />
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={() => setShowExport((v) => !v)}
-          disabled={!hasFile}
-          title="تصدير / تصغير الصور"
-          data-testid="mr-btn-export"
-        >
-          <Archive size={18} />
-        </button>
-
-        <button
-          className={`mr-btn mr-btn-icon ${showInfoCard ? "mr-btn-active" : ""}`}
-          onClick={() => setShowInfoCard((v) => !v)}
-          disabled={!hasFile}
-          title="بطاقة معلومات المخطوط"
-          data-testid="mr-btn-info"
-        >
-          <BookOpen size={18} />
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={openAddComment}
-          disabled={!hasFile}
-          title="إضافة تعليق (Ctrl+M)"
-          data-testid="mr-btn-add-comment"
-        >
-          <MessageSquarePlus size={18} />
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={() => setShowComments((v) => !v)}
-          disabled={!hasFile}
-          title="التعليقات وتصديرها"
-          data-testid="mr-btn-comments"
-        >
-          <MessagesSquare size={18} />
-          {currentComments.length > 0 && (
-            <span style={{ fontSize: 11, marginInlineStart: 2 }}>{currentComments.length}</span>
+        {/* 2. بطاقة المخطوط */}
+        <div className="mr-group">
+          <button
+            className={`mr-gbtn ${showInfoCard ? "mr-gbtn-active" : ""}`}
+            onClick={() => hasFile && setShowInfoCard((v) => !v)}
+            disabled={!hasFile}
+            title="إظهار/إخفاء بطاقة المخطوط"
+            data-testid="mr-btn-info"
+          >
+            <BookOpen size={22} />
+            <span>البطاقة</span>
+          </button>
+          <button
+            className="mr-gbtn-arrow"
+            onClick={() => hasFile && setOpenGroup(openGroup === "card" ? null : "card")}
+            disabled={!hasFile}
+            data-testid="mr-btn-card-arrow"
+          >
+            <ChevronDown size={14} />
+          </button>
+          {openGroup === "card" && (
+            <div className="mr-popover" data-testid="mr-pop-card">
+              <button className="mr-pop-item" onClick={() => { setShowInfoEditor(true); setOpenGroup(null); }} data-testid="mr-pop-card-edit">
+                <Edit3 size={13} /> تحرير البطاقة
+              </button>
+              <button className="mr-pop-item" onClick={() => { copyInfoAsTable(); setOpenGroup(null); }} data-testid="mr-pop-card-copy">
+                <Copy size={13} /> نسخ البطاقة كجدول
+              </button>
+              <button className="mr-pop-item" onClick={() => { setShowInfoCard((v) => !v); setOpenGroup(null); }}>
+                <Eye size={13} /> {showInfoCard ? "إخفاء البطاقة" : "إظهار البطاقة"}
+              </button>
+            </div>
           )}
-        </button>
+        </div>
 
-        <button
-          className={`mr-btn mr-btn-icon ${snipping ? "mr-btn-active" : ""}`}
-          onClick={beginSnip}
-          disabled={!hasFile}
-          title="التقاط لقطة (Ctrl+Shift+S)"
-          data-testid="mr-btn-snip"
-        >
-          <Scissors size={18} />
-        </button>
+        {/* 3. تصفح المخطوط */}
+        <div className="mr-group">
+          <button
+            className="mr-gbtn"
+            onClick={() => hasFile && setOpenGroup(openGroup === "browse" ? null : "browse")}
+            disabled={!hasFile}
+            data-testid="mr-btn-browse"
+            title="أدوات تصفح المخطوط (تكبير/تدوير/فلاتر)"
+          >
+            <Eye size={22} />
+            <span>تصفح</span>
+            <ChevronDown size={12} />
+          </button>
+          {openGroup === "browse" && (
+            <div className="mr-popover mr-popover-wide" data-testid="mr-pop-browse">
+              <div className="mr-pop-title">التكبير: {Math.round(scale * 100)}%</div>
+              <div className="mr-pop-row">
+                <button className="mr-btn" onClick={zoomOut} data-testid="mr-btn-zoom-out"><ZoomOut size={14} /> تصغير</button>
+                <button className="mr-btn" onClick={zoomIn} data-testid="mr-btn-zoom-in"><ZoomIn size={14} /> تكبير</button>
+                <button className="mr-btn" onClick={rotate} data-testid="mr-btn-rotate"><RotateCw size={14} /> تدوير</button>
+              </div>
+              <div className="mr-pop-title">فلاتر الصورة:</div>
+              <div className="mr-field">
+                <label>السطوع <span className="val">{state.brightness}%</span></label>
+                <input type="range" min="30" max="220" value={state.brightness}
+                  onChange={(e) => setState((s) => ({ ...s, brightness: Number(e.target.value) }))} data-testid="mr-set-brightness" />
+              </div>
+              <div className="mr-field">
+                <label>التباين <span className="val">{state.contrast}%</span></label>
+                <input type="range" min="30" max="280" value={state.contrast}
+                  onChange={(e) => setState((s) => ({ ...s, contrast: Number(e.target.value) }))} data-testid="mr-set-contrast" />
+              </div>
+              <div className="mr-field">
+                <label>الإشباع <span className="val">{state.saturate}%</span></label>
+                <input type="range" min="0" max="300" value={state.saturate}
+                  onChange={(e) => setState((s) => ({ ...s, saturate: Number(e.target.value) }))} data-testid="mr-set-saturate" />
+              </div>
+              <div className="mr-field">
+                <label>الحدة (Sharpen) <span className="val">{state.sharpen}%</span></label>
+                <input type="range" min="0" max="100" value={state.sharpen}
+                  onChange={(e) => setState((s) => ({ ...s, sharpen: Number(e.target.value) }))} data-testid="mr-set-sharpen" />
+              </div>
+              <div className="mr-field">
+                <label>إزالة التشويش <span className="val">{state.denoise}%</span></label>
+                <input type="range" min="0" max="100" value={state.denoise}
+                  onChange={(e) => setState((s) => ({ ...s, denoise: Number(e.target.value) }))} data-testid="mr-set-denoise" />
+              </div>
+              <div className="mr-pop-title">عكس الألوان:</div>
+              <div className="mr-pop-row">
+                <button className={`mr-btn ${state.invert ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invert: !s.invert }))} data-testid="mr-set-invert">
+                  <SunMedium size={12} /> نيجاتيف كامل
+                </button>
+                <button className={`mr-btn ${state.invertR ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertR: !s.invertR }))} data-testid="mr-set-invert-r" style={{color: state.invertR ? "#ff6b6b" : undefined}}>R</button>
+                <button className={`mr-btn ${state.invertG ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertG: !s.invertG }))} data-testid="mr-set-invert-g" style={{color: state.invertG ? "#5cff8f" : undefined}}>G</button>
+                <button className={`mr-btn ${state.invertB ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertB: !s.invertB }))} data-testid="mr-set-invert-b" style={{color: state.invertB ? "#6ba8ff" : undefined}}>B</button>
+              </div>
+              <div className="mr-pop-title">شريط مصغّرات الصفحات:</div>
+              <div className="mr-pop-row">
+                <button className={`mr-btn ${showThumbs ? "mr-btn-active" : ""}`} onClick={() => setShowThumbs((v) => !v)} data-testid="mr-btn-thumbs">
+                  <LayoutGrid size={13} /> {showThumbs ? "إخفاء" : "إظهار"}
+                </button>
+                <button className={`mr-btn ${thumbsDirection === "horizontal" ? "mr-btn-active" : ""}`}
+                  onClick={() => setThumbsDirection(thumbsDirection === "horizontal" ? "vertical" : "horizontal")}
+                  data-testid="mr-btn-thumbs-dir">
+                  {thumbsDirection === "horizontal" ? "أفقي" : "عمودي"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
-        <button
-          className={`mr-btn mr-btn-icon ${showHeadings ? "mr-btn-active" : ""}`}
-          onClick={() => setShowHeadings((v) => !v)}
-          disabled={!hasFile}
-          title="فهرس/عناوين المخطوط"
-          data-testid="mr-btn-headings"
-        >
-          <List size={18} />
-          {currentHeadings.length > 0 && <span style={{ fontSize: 11, marginInlineStart: 2 }}>{currentHeadings.length}</span>}
-        </button>
+        {/* 4. ترقيم المخطوط */}
+        <div className="mr-group">
+          <button
+            className={`mr-gbtn ${state.splitPages ? "mr-gbtn-active" : ""}`}
+            onClick={() => { if (!hasFile) return; setShowFolioSettings(true); setNumberStep(1); setOpenGroup(null); }}
+            disabled={!hasFile}
+            data-testid="mr-btn-number"
+            title="تقسيم الصفحات وترقيم الأوراق (أ/ب)"
+          >
+            <Hash size={22} />
+            <span>ترقيم</span>
+          </button>
+        </div>
 
-        <button
-          className={`mr-btn mr-btn-icon ${showThumbs ? "mr-btn-active" : ""}`}
-          onClick={() => setShowThumbs((v) => !v)}
-          disabled={!hasFile}
-          title="شريط مصغّرات الصفحات"
-          data-testid="mr-btn-thumbs"
-        >
-          <LayoutGrid size={18} />
-        </button>
+        {/* 5. مقابلة المخطوط (المسطرة) */}
+        <div className="mr-group">
+          <button
+            className={`mr-gbtn ${state.rulerVisible ? "mr-gbtn-active" : ""}`}
+            onClick={() => hasFile && toggleRuler()}
+            disabled={!hasFile}
+            data-testid="mr-btn-toggle-ruler"
+            title="إظهار/إخفاء المسطرة (H)"
+          >
+            <Ruler size={22} />
+            <span>مقابلة</span>
+          </button>
+          <button
+            className="mr-gbtn-arrow"
+            onClick={() => hasFile && setOpenGroup(openGroup === "ruler" ? null : "ruler")}
+            disabled={!hasFile}
+            data-testid="mr-btn-ruler-arrow"
+          >
+            <ChevronDown size={14} />
+          </button>
+          {openGroup === "ruler" && (
+            <div className="mr-popover mr-popover-wide" data-testid="mr-pop-ruler">
+              <div className="mr-pop-title">شكل المسطرة:</div>
+              <div className="mr-pop-row">
+                {[
+                  { v: "band", lbl: "شريط" },
+                  { v: "line", lbl: "خط" },
+                  { v: "parallelogram", lbl: "متوازي" },
+                ].map((sh) => (
+                  <button key={sh.v}
+                    className={`mr-btn ${state.rulerShape === sh.v ? "mr-btn-active" : ""}`}
+                    onClick={() => setState((s) => ({ ...s, rulerShape: sh.v }))}
+                    data-testid={`mr-ruler-shape-${sh.v}`}>
+                    {sh.lbl}
+                  </button>
+                ))}
+              </div>
+              <div className="mr-field">
+                <label>ارتفاع المسطرة <span className="val">{state.rulerHeight}px</span></label>
+                <input type="range" min="4" max="200" value={state.rulerHeight}
+                  onChange={(e) => setState((s) => ({ ...s, rulerHeight: Number(e.target.value) }))} data-testid="mr-set-height" />
+              </div>
+              <div className="mr-field">
+                <label>عرض المسطرة <span className="val">{state.rulerWidth}%</span></label>
+                <input type="range" min="10" max="100" value={state.rulerWidth}
+                  onChange={(e) => setState((s) => ({ ...s, rulerWidth: Number(e.target.value) }))} data-testid="mr-set-width" />
+              </div>
+              <div className="mr-field">
+                <label>محاذاة المسطرة</label>
+                <div className="mr-pop-row">
+                  {[
+                    { v: "start", lbl: "يمين" },
+                    { v: "center", lbl: "وسط" },
+                    { v: "end", lbl: "يسار" },
+                  ].map((a) => (
+                    <button key={a.v}
+                      className={`mr-btn ${state.rulerAlign === a.v ? "mr-btn-active" : ""}`}
+                      onClick={() => setState((s) => ({ ...s, rulerAlign: a.v }))}
+                      data-testid={`mr-ruler-align-${a.v}`}>{a.lbl}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="mr-field">
+                <label>زاوية الميلان <span className="val">{state.rulerTilt}°</span></label>
+                <input type="range" min="-15" max="15" step="0.5" value={state.rulerTilt}
+                  onChange={(e) => setState((s) => ({ ...s, rulerTilt: Number(e.target.value) }))} data-testid="mr-set-tilt" />
+              </div>
+              <div className="mr-field">
+                <label>لون المسطرة <span className="val">{state.rulerColor}</span></label>
+                <input type="color" value={state.rulerColor}
+                  onChange={(e) => setState((s) => ({ ...s, rulerColor: e.target.value }))} data-testid="mr-set-color" />
+              </div>
+              <div className="mr-field">
+                <label>شفافية المسطرة <span className="val">{Math.round(state.rulerOpacity * 100)}%</span></label>
+                <input type="range" min="10" max="90" value={Math.round(state.rulerOpacity * 100)}
+                  onChange={(e) => setState((s) => ({ ...s, rulerOpacity: Number(e.target.value) / 100 }))} data-testid="mr-set-opacity" />
+              </div>
+              <div className="mr-field">
+                <label>تعتيم ما حول السطر <span className="val">{Math.round(state.dimAlpha * 100)}%</span></label>
+                <input type="range" min="0" max="80" value={Math.round(state.dimAlpha * 100)}
+                  onChange={(e) => setState((s) => ({ ...s, dimAlpha: Number(e.target.value) / 100, dimEnabled: Number(e.target.value) > 0 }))} data-testid="mr-set-dim" />
+              </div>
+              <div className="mr-pop-title">التمرير التلقائي:</div>
+              <div className="mr-field">
+                <label>السرعة <span className="val">{state.rulerAutoSpeed} px/ث</span></label>
+                <input type="range" min="0" max="120" step="1" value={state.rulerAutoSpeed}
+                  onChange={(e) => setState((s) => ({ ...s, rulerAutoSpeed: Number(e.target.value) }))} data-testid="mr-set-auto-speed" />
+              </div>
+              <div className="mr-pop-row">
+                <button
+                  className={`mr-btn mr-btn-primary`}
+                  onClick={() => setState((s) => ({ ...s, rulerAutoPlaying: !s.rulerAutoPlaying }))}
+                  data-testid="mr-btn-auto-toggle">
+                  {state.rulerAutoPlaying ? <><Pause size={14} /> إيقاف</> : <><Play size={14} /> تشغيل</>}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 6. التعليق على المخطوط */}
+        <div className="mr-group">
+          <button
+            className="mr-gbtn"
+            onClick={() => hasFile && setOpenGroup(openGroup === "comment" ? null : "comment")}
+            disabled={!hasFile}
+            data-testid="mr-btn-comment"
+            title="التعليقات والعناوين"
+          >
+            <MessagesSquare size={22} />
+            <span>تعليق</span>
+            {(currentComments.length + currentHeadings.length) > 0 && (
+              <span className="mr-badge">{currentComments.length + currentHeadings.length}</span>
+            )}
+          </button>
+          {openGroup === "comment" && (
+            <div className="mr-popover" data-testid="mr-pop-comment">
+              <button className="mr-pop-item" onClick={() => { openAddComment(); setOpenGroup(null); }} data-testid="mr-pop-add-comment">
+                <MessageSquarePlus size={13} /> إضافة تعليق (Ctrl+F)
+              </button>
+              <button className="mr-pop-item" onClick={() => { setShowComments(true); setOpenGroup(null); }} data-testid="mr-pop-list-comments">
+                <MessagesSquare size={13} /> قائمة التعليقات ({currentComments.length})
+              </button>
+              <div className="mr-pop-sep" />
+              <button className="mr-pop-item" onClick={() => { openAddHeading(); setOpenGroup(null); }} data-testid="mr-pop-add-heading">
+                <Plus size={13} /> إضافة عنوان (Ctrl+B)
+              </button>
+              <button className="mr-pop-item" onClick={() => { setShowHeadings(true); setOpenGroup(null); }} data-testid="mr-pop-list-headings">
+                <List size={13} /> قائمة العناوين ({currentHeadings.length})
+              </button>
+              <div className="mr-pop-sep" />
+              <button className="mr-pop-item" onClick={() => { addBookmark(); setOpenGroup(null); }} data-testid="mr-pop-add-bm">
+                <BookmarkPlus size={13} /> إضافة علامة مرجعية
+              </button>
+              <button className="mr-pop-item" onClick={() => { setShowBookmarks(true); setOpenGroup(null); }} data-testid="mr-pop-list-bm">
+                <Bookmark size={13} /> قائمة العلامات ({currentBookmarks.length})
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* 7. التصدير */}
+        <div className="mr-group">
+          <button
+            className="mr-gbtn"
+            onClick={() => hasFile && setOpenGroup(openGroup === "export" ? null : "export")}
+            disabled={!hasFile}
+            data-testid="mr-btn-export"
+            title="تصدير المخطوط"
+          >
+            <Download size={22} />
+            <span>تصدير</span>
+            <ChevronDown size={12} />
+          </button>
+          {openGroup === "export" && (
+            <div className="mr-popover" data-testid="mr-pop-export">
+              <button className="mr-pop-item" onClick={() => { setState((s) => ({ ...s, exportFormat: "zip" })); setShowExport(true); setOpenGroup(null); }} data-testid="mr-exp-zip">
+                <Archive size={13} /> صور مقصوصة (ZIP) — للذكاء الاصطناعي
+              </button>
+              <button className="mr-pop-item" onClick={() => { exportAsIndexedPdf(); setOpenGroup(null); }} data-testid="mr-exp-pdf-indexed">
+                <FileText size={13} /> PDF مفهرس بالعناوين والتعليقات
+              </button>
+              <button className="mr-pop-item" onClick={() => { setState((s) => ({ ...s, exportFormat: "pdf" })); setShowExport(true); setOpenGroup(null); }} data-testid="mr-exp-pdf-comp">
+                <FileText size={13} /> PDF مضغوط (تصغير الحجم)
+              </button>
+              <div className="mr-pop-sep" />
+              <button className="mr-pop-item" onClick={() => { exportCommentsAsWord(); setOpenGroup(null); }} data-testid="mr-exp-word-comments">
+                <FileText size={13} /> تصدير التعليقات إلى Word
+              </button>
+              <button className="mr-pop-item" onClick={() => { exportHeadingsAsWord(); setOpenGroup(null); }} data-testid="mr-exp-word-headings">
+                <FileText size={13} /> تصدير العناوين إلى Word
+              </button>
+              <div className="mr-pop-sep" />
+              <button className="mr-pop-item" onClick={() => { beginSnip(); setOpenGroup(null); }} data-testid="mr-exp-snip">
+                <Scissors size={13} /> التقاط لقطة مع شرح (Ctrl+S)
+              </button>
+            </div>
+          )}
+        </div>
 
         <button
           className="mr-btn mr-btn-icon"
@@ -1434,58 +1796,18 @@ ${sorted.length === 0
         <div className="mr-info">
           {hasFile && (
             <>
-              <button
-                className="mr-btn mr-btn-icon"
-                onClick={firstPage}
-                disabled={state.page <= 1}
-                title="أول المخطوط"
-                data-testid="mr-btn-first"
-              >
-                <ChevronsRight size={18} />
-              </button>
-              <button
-                className="mr-btn mr-btn-icon"
-                onClick={prevPage}
-                disabled={state.page <= 1}
-                title="الصفحة السابقة (Page Up)"
-                data-testid="mr-btn-prev"
-              >
-                <ChevronRight size={18} />
-              </button>
+              <button className="mr-btn mr-btn-icon" onClick={firstPage} disabled={state.page <= 1} title="أول المخطوط" data-testid="mr-btn-first"><ChevronsRight size={18} /></button>
+              <button className="mr-btn mr-btn-icon" onClick={prevPage} disabled={state.page <= 1} title="الصفحة السابقة" data-testid="mr-btn-prev"><ChevronRight size={18} /></button>
               <span className="mr-info-chip" data-testid="mr-page-label">
-                {state.folioMode
-                  ? formatFolio(state.page, {
-                      startFolio: state.folioStart,
-                      offset: state.folioOffset,
-                    })
-                  : `صفحة ${state.page}`}
-                {" · "}
-                {state.page}/{pageCount}
+                {state.folioMode ? formatFolio(state.page, { startFolio: state.folioStart, offset: state.folioOffset }) : `صفحة ${state.page}`}
+                {" · "}{state.page}/{pageCount}
               </span>
-              <button
-                className="mr-btn mr-btn-icon"
-                onClick={nextPage}
-                disabled={state.page >= pageCount}
-                title="الصفحة التالية (Page Down)"
-                data-testid="mr-btn-next"
-              >
-                <ChevronLeft size={18} />
-              </button>
-              <button
-                className="mr-btn mr-btn-icon"
-                onClick={lastPage}
-                disabled={state.page >= pageCount}
-                title="آخر المخطوط"
-                data-testid="mr-btn-last"
-              >
-                <ChevronsLeft size={18} />
-              </button>
+              <button className="mr-btn mr-btn-icon" onClick={nextPage} disabled={state.page >= pageCount} title="الصفحة التالية" data-testid="mr-btn-next"><ChevronLeft size={18} /></button>
+              <button className="mr-btn mr-btn-icon" onClick={lastPage} disabled={state.page >= pageCount} title="آخر المخطوط" data-testid="mr-btn-last"><ChevronsLeft size={18} /></button>
+              <span className="mr-info-chip" title={state.fileName} data-testid="mr-file-label">
+                {state.fileName.length > 30 ? state.fileName.slice(0, 30) + "…" : state.fileName}
+              </span>
             </>
-          )}
-          {hasFile && (
-            <span className="mr-info-chip" title={state.fileName} data-testid="mr-file-label">
-              {state.fileName.length > 40 ? state.fileName.slice(0, 40) + "…" : state.fileName}
-            </span>
           )}
         </div>
       </div>
@@ -1578,7 +1900,7 @@ ${sorted.length === 0
                 style={{
                   position: "absolute",
                   inset: 0,
-                  filter: `brightness(${state.brightness}%) contrast(${state.contrast}%) ${state.invert ? "invert(1) hue-rotate(180deg)" : ""}`,
+                  filter: `brightness(${state.brightness}%) contrast(${state.contrast}%) saturate(${state.saturate}%) ${state.invert ? "invert(1) hue-rotate(180deg)" : ""}`,
                 }}
               >
                 <canvas ref={canvasRef} className="mr-page-canvas" />
@@ -1607,23 +1929,36 @@ ${sorted.length === 0
               )}
 
               {/* Ruler band */}
-              {state.rulerVisible && pageSize.h > 0 && (
-                <div
-                  data-ruler
-                  className={`mr-ruler ${rulerDragRef.current.dragging ? "dragging" : ""}`}
-                  style={{
-                    top: state.rulerY,
-                    height: state.rulerHeight,
-                    color: rulerColorRGBA,
-                  }}
-                  onMouseDown={onRulerMouseDown}
-                  data-testid="mr-ruler"
-                >
-                  <div className="mr-ruler-band" />
-                  <div className="mr-ruler-edge top" />
-                  <div className="mr-ruler-edge bot" />
-                </div>
-              )}
+              {state.rulerVisible && pageSize.h > 0 && (() => {
+                const w = pageSize.w || 0;
+                const rulerW = Math.max(20, (state.rulerWidth / 100) * w);
+                let leftOff = 0;
+                if (state.rulerAlign === "center") leftOff = (w - rulerW) / 2;
+                else if (state.rulerAlign === "end") leftOff = w - rulerW;
+                const tilt = state.rulerTilt || 0;
+                const shape = state.rulerShape || "band";
+                return (
+                  <div
+                    data-ruler
+                    className={`mr-ruler mr-ruler-${shape} ${rulerDragRef.current.dragging ? "dragging" : ""}`}
+                    style={{
+                      top: state.rulerY,
+                      left: leftOff,
+                      width: rulerW,
+                      height: state.rulerHeight,
+                      color: rulerColorRGBA,
+                      transform: tilt ? `skewY(${tilt}deg)` : undefined,
+                      transformOrigin: "center",
+                    }}
+                    onMouseDown={onRulerMouseDown}
+                    data-testid="mr-ruler"
+                  >
+                    {shape !== "line" && <div className="mr-ruler-band" />}
+                    <div className="mr-ruler-edge top" />
+                    <div className="mr-ruler-edge bot" />
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
@@ -1852,7 +2187,174 @@ ${sorted.length === 0
         )}
 
         {showFolioSettings && (
-          <div className="mr-settings mr-fade" data-testid="mr-folio-settings" style={{ inset: "auto 10px 10px auto", top: 60, width: 340 }}>
+          <div className="mr-settings mr-fade" data-testid="mr-folio-settings" style={{ inset: "auto 10px 10px auto", top: 60, width: 380, maxHeight: "85vh", overflowY: "auto" }}>
+            <h3 style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              ترقيم المخطوط
+              <button className="mr-btn mr-btn-icon" onClick={() => setShowFolioSettings(false)} title="إغلاق"><X size={14} /></button>
+            </h3>
+
+            {/* Step tabs */}
+            <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+              {[
+                { s: 1, lbl: "1. التقسيم" },
+                { s: 2, lbl: "2. المراجعة" },
+                { s: 3, lbl: "3. الترقيم" },
+              ].map((st) => (
+                <button
+                  key={st.s}
+                  className={`mr-btn ${numberStep === st.s ? "mr-btn-active" : ""}`}
+                  onClick={() => setNumberStep(st.s)}
+                  style={{ flex: 1, justifyContent: "center", padding: "6px 4px", fontSize: 12 }}
+                  data-testid={`mr-number-step-${st.s}`}
+                >
+                  {st.lbl}
+                </button>
+              ))}
+            </div>
+
+            {numberStep === 1 && (
+              <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.7 }}>
+                <b style={{ color: "var(--amber)" }}>الخطوة 1: تفعيل تقسيم الصفحات المزدوجة</b>
+                <br />
+                فعّل التقسيم من المنتصف، وحدّد أول صفحة يبدأ منها التقسيم وآخر صفحة ينتهي عندها. الصفحات خارج هذا المدى تبقى كاملة (مفيد لصفحات الغلاف والكولوفون).
+              </div>
+            )}
+            {numberStep === 2 && (
+              <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.7 }}>
+                <b style={{ color: "var(--amber)" }}>الخطوة 2: مراجعة التقسيم</b>
+                <br />
+                تنقّل بين الأوراق. إذا فشل الكشف الذكي في قصّ ورقة معيّنة من المنتصف، اضبطها يدوياً باستخدام «موضع القص للورقة» أدناه.
+              </div>
+            )}
+            {numberStep === 3 && (
+              <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.7 }}>
+                <b style={{ color: "var(--amber)" }}>الخطوة 3: تفعيل ترقيم الأوراق (أ/ب)</b>
+                <br />
+                فعّل الترقيم، وحدّد رقم الفوليو الأول وعدد صفحات الغلاف قبل بداية المخطوط.
+              </div>
+            )}
+
+            {numberStep === 1 && (
+              <>
+                <div className="mr-field">
+                  <label style={{ cursor: "pointer", flexDirection: "row", justifyContent: "space-between" }}>
+                    <span>تفعيل تقسيم الصفحات المزدوجة</span>
+                    <input type="checkbox" checked={state.splitPages} onChange={toggleSplit} data-testid="mr-num-split-toggle" style={{ accentColor: "var(--amber)" }} />
+                  </label>
+                </div>
+                <div className="mr-field">
+                  <label>ابدأ التقسيم من صفحة <span className="val">{state.splitFrom}</span></label>
+                  <input type="number" min="1" value={state.splitFrom}
+                    onChange={(e) => applySplitRange(Math.max(1, Number(e.target.value) || 1), state.splitTo)}
+                    data-testid="mr-split-from" />
+                </div>
+                <div className="mr-field">
+                  <label>انتهِ عند صفحة <span className="val">{Math.min(state.splitTo, baseDoc?.numPages || state.splitTo)}</span></label>
+                  <input type="number" min="1" value={state.splitTo}
+                    onChange={(e) => applySplitRange(state.splitFrom, Math.max(state.splitFrom, Number(e.target.value) || state.splitFrom))}
+                    data-testid="mr-split-to" />
+                </div>
+                {baseDoc && (
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>إجمالي صفحات الملف الأصلي: <b style={{ color: "var(--parchment)" }}>{baseDoc.numPages}</b></div>
+                )}
+              </>
+            )}
+
+            {numberStep === 2 && state.splitPages && baseDoc && (() => {
+              const activeBasePage = Math.ceil(state.page / 2);
+              const overrides = foldOverridesMap[state.fileKey] || {};
+              const current = overrides[activeBasePage];
+              const displayVal = current != null ? Math.round(current * 100) : 50;
+              return (
+                <div className="mr-field">
+                  <label>موضع القص للورقة {activeBasePage} <span className="val">{displayVal}%</span></label>
+                  <input type="range" min="20" max="80" value={displayVal}
+                    onChange={(e) => {
+                      const v = Number(e.target.value) / 100;
+                      setFoldRatio(activeBasePage, v);
+                      if (baseDoc && state.splitPages) {
+                        const range = { from: state.splitFrom, to: Math.min(state.splitTo, baseDoc.numPages) };
+                        const wrapped = toggleSplitDoc(baseDoc, true, range);
+                        const origGetPage = wrapped.getPage.bind(wrapped);
+                        wrapped.getPage = async (n) => {
+                          const p = await origGetPage(n);
+                          if (p._foldRatio != null) {
+                            const bp = Math.ceil((n - state.splitFrom + 1) / 2) + state.splitFrom - 1;
+                            const o = (foldOverridesMap[state.fileKey] || {})[bp];
+                            if (o != null) p._foldRatio = o;
+                          }
+                          return p;
+                        };
+                        setDoc(wrapped);
+                      }
+                    }}
+                    data-testid="mr-fold-manual" />
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                    تنقّل بين الصفحات باستخدام أسهم المتصفح، ثم اضبط الورقة الحالية إن فشل الكشف الذكي.
+                  </div>
+                </div>
+              );
+            })()}
+
+            {numberStep === 2 && !state.splitPages && (
+              <div style={{ padding: "10px", color: "var(--muted)", fontSize: 12, textAlign: "center", fontStyle: "italic" }}>
+                يجب أولاً تفعيل التقسيم في الخطوة 1.
+              </div>
+            )}
+
+            {numberStep === 3 && (
+              <>
+                <div className="mr-field">
+                  <label style={{ cursor: "pointer", flexDirection: "row", justifyContent: "space-between" }}>
+                    <span>تفعيل ترقيم الفوليو (أ/ب)</span>
+                    <input type="checkbox" checked={state.folioMode}
+                      onChange={(e) => setState((s) => ({ ...s, folioMode: e.target.checked }))}
+                      data-testid="mr-folio-toggle" style={{ accentColor: "var(--amber)" }} />
+                  </label>
+                </div>
+                <div className="mr-field">
+                  <label>رقم الفوليو الأول <span className="val">{state.folioStart}</span></label>
+                  <input type="number" min="1" value={state.folioStart}
+                    onChange={(e) => setState((s) => ({ ...s, folioStart: Math.max(1, Number(e.target.value) || 1) }))}
+                    data-testid="mr-folio-start" />
+                </div>
+                <div className="mr-field">
+                  <label>صفحات الغلاف قبل بداية المخطوط <span className="val">{state.folioOffset}</span></label>
+                  <input type="number" min="0" value={state.folioOffset}
+                    onChange={(e) => setState((s) => ({ ...s, folioOffset: Math.max(0, Number(e.target.value) || 0) }))}
+                    data-testid="mr-folio-offset" />
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", padding: "6px 8px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)" }}>
+                  الصفحة الحالية:{" "}
+                  <span style={{ color: "var(--amber)", fontWeight: 600 }}>
+                    {state.folioMode ? formatFolio(state.page, { startFolio: state.folioStart, offset: state.folioOffset }) : `صفحة ${state.page}`}
+                  </span>
+                </div>
+              </>
+            )}
+
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+              {numberStep > 1 && (
+                <button className="mr-btn" onClick={() => setNumberStep(numberStep - 1)} style={{ flex: 1, justifyContent: "center" }} data-testid="mr-num-prev">
+                  ← السابق
+                </button>
+              )}
+              {numberStep < 3 && (
+                <button className="mr-btn mr-btn-primary" onClick={() => setNumberStep(numberStep + 1)} style={{ flex: 1, justifyContent: "center" }} data-testid="mr-num-next">
+                  التالي ←
+                </button>
+              )}
+              {numberStep === 3 && (
+                <button className="mr-btn mr-btn-primary" onClick={exportAsIndexedPdf} style={{ flex: 1, justifyContent: "center" }} data-testid="mr-num-save-pdf">
+                  <Download size={13} /> حفظ وتصدير PDF
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {false && showFolioSettings && (
+          <div style={{ display: "none" }} data-testid="mr-folio-settings-old">
             <h3>ترقيم المخطوط + مدى التقسيم</h3>
 
             <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.7 }}>
@@ -2083,44 +2585,35 @@ ${sorted.length === 0
               </button>
             </div>
             <div className="mr-info-card-body">
-              {currentInfo.author && (
-                <div><span className="k">المؤلف:</span> {currentInfo.author}</div>
-              )}
-              {currentInfo.copyist && (
-                <div><span className="k">الناسخ:</span> {currentInfo.copyist}</div>
-              )}
-              {currentInfo.copyDate && (
-                <div><span className="k">تاريخ النسخ:</span> {currentInfo.copyDate}</div>
-              )}
               {currentInfo.number && (
                 <div><span className="k">رقم النسخة:</span> {currentInfo.number}</div>
               )}
               {currentInfo.library && (
                 <div><span className="k">المكتبة:</span> {currentInfo.library}</div>
               )}
-              {currentInfo.catalog && (
-                <div><span className="k">الفهرسة:</span> {currentInfo.catalog}</div>
+              {(currentInfo.type || "single") === "single" && (
+                <>
+                  {currentInfo.author && (
+                    <div><span className="k">المؤلف:</span> {currentInfo.author}</div>
+                  )}
+                  {currentInfo.copyist && (
+                    <div><span className="k">الناسخ:</span> {currentInfo.copyist}</div>
+                  )}
+                  {currentInfo.copyDate && (
+                    <div><span className="k">تاريخ النسخ:</span> {currentInfo.copyDate}</div>
+                  )}
+                </>
               )}
-              {currentInfo.subject && (
-                <div><span className="k">الموضوع:</span> {currentInfo.subject}</div>
+              {currentInfo.type === "collection" && currentInfo.titlesList && (
+                <div style={{ maxHeight: 100, overflowY: "auto", padding: "2px 4px", background: "var(--ink-3)", borderRadius: 4, marginTop: 3 }}>
+                  <span className="k">المجموع:</span>
+                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit", fontSize: 11, lineHeight: 1.6 }}>{currentInfo.titlesList}</pre>
+                </div>
               )}
-              {currentInfo.script && (
-                <div><span className="k">الخط:</span> {currentInfo.script}</div>
-              )}
-              {currentInfo.foliosCount && (
-                <div><span className="k">عدد الأوراق:</span> {currentInfo.foliosCount}</div>
-              )}
-              {currentInfo.downloadUrl && (
-                <div>
-                  <span className="k">الرابط:</span>{" "}
-                  <a
-                    href={currentInfo.downloadUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: "var(--amber)" }}
-                  >
-                    <ExternalLink size={10} style={{ verticalAlign: "middle" }} /> فتح
-                  </a>
+              {currentInfo.notes && (
+                <div style={{ maxHeight: 80, overflowY: "auto", padding: "2px 4px", background: "var(--ink-3)", borderRadius: 4, marginTop: 3 }}>
+                  <span className="k">ملاحظات:</span>
+                  <div style={{ fontSize: 11, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{currentInfo.notes}</div>
                 </div>
               )}
               {!hasInfoFilled(currentInfo) && (
@@ -2313,7 +2806,7 @@ ${sorted.length === 0
 
         {/* Vertical thumbnails strip */}
         {showThumbs && hasFile && (
-          <div className="mr-thumbs" data-testid="mr-thumbs-strip">
+          <div className={`mr-thumbs mr-thumbs-${thumbsDirection}`} data-testid="mr-thumbs-strip">
             {thumbUrls.length === 0 && (
               <div style={{ padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>جارٍ إنشاء المصغّرات…</div>
             )}
@@ -2365,7 +2858,51 @@ function escapeHtml(s) {
 
 function hasInfoFilled(info) {
   if (!info) return false;
-  return Boolean(info.title || info.number || info.library || info.catalog || info.downloadUrl || info.notes);
+  return Boolean(info.title || info.number || info.library || info.notes || info.titlesList);
+}
+
+// 3x3 box blur (denoise) — strength 0..1 (fraction blended with original)
+function boxBlur3x3(data, w, h, strength) {
+  const src = new Uint8ClampedArray(data);
+  const k = 1 / 9;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        let sum = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            sum += src[((y + dy) * w + (x + dx)) * 4 + c];
+          }
+        }
+        const blurred = sum * k;
+        data[i + c] = src[i + c] * (1 - strength) + blurred * strength;
+      }
+    }
+  }
+}
+
+// 3x3 unsharp mask sharpen — strength 0..1
+function sharpen3x3(data, w, h, strength) {
+  const src = new Uint8ClampedArray(data);
+  // Kernel: center 5, edges -1 for cardinal directions
+  const s = strength;
+  const kCenter = 1 + 4 * s;
+  const kEdge = -s;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        const center = src[i + c];
+        const top = src[((y - 1) * w + x) * 4 + c];
+        const bot = src[((y + 1) * w + x) * 4 + c];
+        const lft = src[(y * w + (x - 1)) * 4 + c];
+        const rgt = src[(y * w + (x + 1)) * 4 + c];
+        const v = kCenter * center + kEdge * (top + bot + lft + rgt);
+        data[i + c] = v < 0 ? 0 : v > 255 ? 255 : v;
+      }
+    }
+  }
 }
 
 function pickRulerDefaults() {
@@ -2457,88 +2994,85 @@ function InfoEditorModal({ initial, onSave, onCancel }) {
         <h2 style={{ fontSize: 20 }}>بطاقة معلومات المخطوط</h2>
 
         <div className="mr-field">
-          <label>عنوان المخطوط <span style={{ color: "var(--amber)" }}>*</span></label>
-          <input ref={firstRef} type="text" value={f.title || ""} onChange={setField("title")} style={inputStyle} data-testid="mr-info-field-title" />
-        </div>
-
-        <div className="mr-field">
-          <label>عناوين أخرى / عنوان بديل</label>
-          <input type="text" value={f.altTitle || ""} onChange={setField("altTitle")} style={inputStyle} data-testid="mr-info-field-altTitle" />
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <div className="mr-field">
-            <label>المؤلف</label>
-            <input type="text" value={f.author || ""} onChange={setField("author")} style={inputStyle} data-testid="mr-info-field-author" />
-          </div>
-          <div className="mr-field">
-            <label>الناسخ</label>
-            <input type="text" value={f.copyist || ""} onChange={setField("copyist")} style={inputStyle} data-testid="mr-info-field-copyist" />
-          </div>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <div className="mr-field">
-            <label>تاريخ النسخ (هجري/ميلادي)</label>
-            <input type="text" value={f.copyDate || ""} onChange={setField("copyDate")} placeholder="مثلاً: 823هـ / 1420م" style={inputStyle} data-testid="mr-info-field-copyDate" />
-          </div>
-          <div className="mr-field">
-            <label>العصر / القرن</label>
-            <input type="text" value={f.era || ""} onChange={setField("era")} placeholder="مثلاً: القرن 9 الهجري" style={inputStyle} data-testid="mr-info-field-era" />
+          <label>نوع المخطوط</label>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              className={`mr-btn ${(f.type || "single") === "single" ? "mr-btn-active" : ""}`}
+              onClick={() => setF({ ...f, type: "single" })}
+              style={{ flex: 1, justifyContent: "center" }}
+              data-testid="mr-info-type-single"
+            >
+              مفرد (كتاب واحد)
+            </button>
+            <button
+              className={`mr-btn ${f.type === "collection" ? "mr-btn-active" : ""}`}
+              onClick={() => setF({ ...f, type: "collection" })}
+              style={{ flex: 1, justifyContent: "center" }}
+              data-testid="mr-info-type-collection"
+            >
+              مجموع (عدة كتب)
+            </button>
           </div>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <div className="mr-field">
-            <label>رقم النسخة</label>
+            <label>رقم النسخة <span style={{ color: "var(--amber)" }}>(يُستورد من اسم الملف)</span></label>
             <input type="text" value={f.number || ""} onChange={setField("number")} style={inputStyle} data-testid="mr-info-field-number" />
           </div>
           <div className="mr-field">
             <label>المكتبة</label>
-            <input type="text" value={f.library || ""} onChange={setField("library")} style={inputStyle} data-testid="mr-info-field-library" />
+            <input type="text" value={f.library || ""} onChange={setField("library")} placeholder="اسم المكتبة" style={inputStyle} data-testid="mr-info-field-library" />
           </div>
         </div>
+
+        {(f.type || "single") === "single" && (
+          <>
+            <div className="mr-field">
+              <label>عنوان المخطوط</label>
+              <input ref={firstRef} type="text" value={f.title || ""} onChange={setField("title")} style={inputStyle} data-testid="mr-info-field-title" />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div className="mr-field">
+                <label>المؤلف</label>
+                <input type="text" value={f.author || ""} onChange={setField("author")} style={inputStyle} data-testid="mr-info-field-author" />
+              </div>
+              <div className="mr-field">
+                <label>الناسخ</label>
+                <input type="text" value={f.copyist || ""} onChange={setField("copyist")} style={inputStyle} data-testid="mr-info-field-copyist" />
+              </div>
+            </div>
+            <div className="mr-field">
+              <label>تاريخ النسخ</label>
+              <input type="text" value={f.copyDate || ""} onChange={setField("copyDate")} placeholder="مثلاً: 823هـ / 1420م" style={inputStyle} data-testid="mr-info-field-copyDate" />
+            </div>
+          </>
+        )}
+
+        {f.type === "collection" && (
+          <div className="mr-field">
+            <label>عناوين الكتب في المجموع (كل عنوان في سطر — يُرقَّم تلقائياً)</label>
+            <textarea
+              value={f.titlesList || ""}
+              onChange={setField("titlesList")}
+              placeholder={"1. …\n2. …\n3. …"}
+              rows={8}
+              style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit", lineHeight: 1.8 }}
+              data-testid="mr-info-field-titlesList"
+            />
+          </div>
+        )}
 
         <div className="mr-field">
-          <label>بيانات الفهرسة (رقم الفهرس / كولوفون)</label>
-          <input type="text" value={f.catalog || ""} onChange={setField("catalog")} style={inputStyle} data-testid="mr-info-field-catalog" />
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <div className="mr-field">
-            <label>الموضوع / العلم</label>
-            <input type="text" value={f.subject || ""} onChange={setField("subject")} placeholder="فقه، نحو، حديث…" style={inputStyle} data-testid="mr-info-field-subject" />
-          </div>
-          <div className="mr-field">
-            <label>اللغة</label>
-            <input type="text" value={f.language || ""} onChange={setField("language")} style={inputStyle} data-testid="mr-info-field-language" />
-          </div>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <div className="mr-field">
-            <label>نوع الخط</label>
-            <input type="text" value={f.script || ""} onChange={setField("script")} placeholder="نسخ، مغربي، ثلث…" style={inputStyle} data-testid="mr-info-field-script" />
-          </div>
-          <div className="mr-field">
-            <label>عدد الأوراق</label>
-            <input type="text" value={f.foliosCount || ""} onChange={setField("foliosCount")} style={inputStyle} data-testid="mr-info-field-foliosCount" />
-          </div>
-        </div>
-
-        <div className="mr-field">
-          <label>الأبعاد / القياس</label>
-          <input type="text" value={f.dimensions || ""} onChange={setField("dimensions")} placeholder="مثلاً: 24 × 17 سم" style={inputStyle} data-testid="mr-info-field-dimensions" />
-        </div>
-
-        <div className="mr-field">
-          <label>رابط التحميل الأصلي</label>
-          <input type="url" value={f.downloadUrl || ""} onChange={setField("downloadUrl")} placeholder="https://…" style={inputStyle} data-testid="mr-info-field-url" />
-        </div>
-
-        <div className="mr-field">
-          <label>ملاحظات فهرسة إضافية</label>
-          <textarea value={f.notes || ""} onChange={setField("notes")} rows={3} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} data-testid="mr-info-field-notes" />
+          <label>ملاحظات ووصف المخطوط</label>
+          <textarea
+            value={f.notes || ""}
+            onChange={setField("notes")}
+            rows={6}
+            placeholder="أضف هنا وصفاً مفصّلاً للمخطوط: حالته، خطه، أختامه، تعليقات على الهوامش، إجازات، سماعات…"
+            style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit", lineHeight: 1.8 }}
+            data-testid="mr-info-field-notes"
+          />
         </div>
 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
@@ -2717,6 +3251,8 @@ function SnipPreview({ snip, onClose, onSave, onCopy }) {
   const [strokeWidth, setStrokeWidth] = React.useState(4);
   const [fontSize, setFontSize] = React.useState(22);
   const [history, setHistory] = React.useState([]); // canvas snapshots
+  const [captionEnabled, setCaptionEnabled] = React.useState(false);
+  const [captionText, setCaptionText] = React.useState("");
   const startRef = React.useRef(null);
   const prevSnapshotRef = React.useRef(null);
 
@@ -2889,6 +3425,43 @@ function SnipPreview({ snip, onClose, onSave, onCopy }) {
 
   const exportDataUrl = () => canvasRef.current?.toDataURL("image/png") || snip.dataUrl;
 
+  // Compose a bigger canvas with the captioned text below the snip image (if enabled)
+  const exportWithCaption = () => {
+    const baseUrl = exportDataUrl();
+    if (!captionEnabled || !captionText.trim()) return baseUrl;
+    const src = canvasRef.current;
+    if (!src) return baseUrl;
+    const w = src.width;
+    // Compute text height: wrap lines every ~80 chars, 24px per line + padding
+    const lines = captionText.split("\n");
+    const approxLineHeight = Math.max(28, Math.round(w / 45));
+    const padding = Math.round(approxLineHeight * 0.8);
+    const textAreaH = padding * 2 + lines.length * approxLineHeight;
+    const outH = src.height + textAreaH;
+    const out = document.createElement("canvas");
+    out.width = w;
+    out.height = outH;
+    const ctx = out.getContext("2d");
+    // background
+    ctx.fillStyle = "#faf5ec";
+    ctx.fillRect(0, 0, w, outH);
+    // draw image at top
+    ctx.drawImage(src, 0, 0);
+    // draw separator
+    ctx.fillStyle = "#8b6a1c";
+    ctx.fillRect(padding, src.height + Math.round(padding / 3), w - 2 * padding, 2);
+    // draw text
+    ctx.fillStyle = "#1a1613";
+    ctx.font = `${Math.round(approxLineHeight * 0.75)}px "Noto Naskh Arabic", "Amiri", serif`;
+    ctx.direction = "rtl";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "top";
+    lines.forEach((line, i) => {
+      ctx.fillText(line, w - padding, src.height + padding + i * approxLineHeight);
+    });
+    return out.toDataURL("image/png");
+  };
+
   const toolBtn = (key, Icon, label) => (
     <button
       className={`mr-btn ${tool === key ? "mr-btn-active" : ""}`}
@@ -2971,12 +3544,35 @@ function SnipPreview({ snip, onClose, onSave, onCopy }) {
           />
         </div>
 
+        <div className="mr-field" style={{ marginTop: 8 }}>
+          <label style={{ cursor: "pointer", flexDirection: "row", justifyContent: "flex-start", gap: 8, alignItems: "center" }}>
+            <input
+              type="checkbox"
+              checked={captionEnabled}
+              onChange={(e) => setCaptionEnabled(e.target.checked)}
+              data-testid="mr-snip-caption-enable"
+              style={{ accentColor: "var(--amber)" }}
+            />
+            <span>إضافة شرح نصيّ أسفل اللقطة</span>
+          </label>
+        </div>
+        {captionEnabled && (
+          <textarea
+            value={captionText}
+            onChange={(e) => setCaptionText(e.target.value)}
+            placeholder="اكتب شرحاً أو ملاحظة لتظهر أسفل اللقطة عند الحفظ"
+            rows={2}
+            data-testid="mr-snip-caption-text"
+            style={{ padding: "8px 10px", borderRadius: 6, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontFamily: "inherit", fontSize: 13, width: "100%", resize: "vertical" }}
+          />
+        )}
+
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
           <button className="mr-btn" onClick={onClose} data-testid="mr-snip-close">إغلاق</button>
-          <button className="mr-btn" onClick={() => onCopy(exportDataUrl())} data-testid="mr-snip-copy">
+          <button className="mr-btn" onClick={() => onCopy(exportWithCaption())} data-testid="mr-snip-copy">
             <Copy size={13} /> نسخ إلى الحافظة
           </button>
-          <button className="mr-btn mr-btn-primary" onClick={() => onSave(exportDataUrl(), snip.filename)} data-testid="mr-snip-save">
+          <button className="mr-btn mr-btn-primary" onClick={() => onSave(exportWithCaption(), snip.filename)} data-testid="mr-snip-save">
             <Download size={13} /> حفظ PNG
           </button>
         </div>
@@ -2996,10 +3592,10 @@ const SHORTCUTS = [
   { desc: "تكبير/تصغير بعجلة الفأرة", keys: ["Ctrl", "عجلة"] },
   { desc: "تدوير 90°", keys: ["R"] },
   { desc: "إظهار/إخفاء المسطرة", keys: ["H"] },
-  { desc: "إضافة علامة مرجعية", keys: ["Ctrl", "B"] },
+  { desc: "إضافة تعليق على المخطوط", keys: ["Ctrl", "F"] },
+  { desc: "إضافة عنوان (فهرس)", keys: ["Ctrl", "B"] },
+  { desc: "التقاط لقطة من الصفحة", keys: ["Ctrl", "S"] },
   { desc: "فتح/إغلاق قائمة العلامات", keys: ["Ctrl", "G"] },
-  { desc: "إضافة تعليق على السطر الحالي", keys: ["Ctrl", "M"] },
-  { desc: "التقاط لقطة من الصفحة", keys: ["Ctrl", "Shift", "S"] },
   { desc: "ملء الشاشة", keys: ["F11"] },
   { desc: "فتح/إغلاق نافذة الاختصارات", keys: ["؟"] },
   { desc: "إغلاق النوافذ", keys: ["Esc"] },

@@ -1,15 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Columns, Square, LayoutPanelTop } from "lucide-react";
+import { Columns, Square } from "lucide-react";
 import ManuscriptRuler from "@/components/ManuscriptRuler";
 
 /**
- * SplitView renders 1, 2 or 3 ManuscriptRuler panes side-by-side.
+ * SplitView renders 1 or 2 ManuscriptRuler panes side-by-side.
  * - Single pane (default): renders the component directly (no iframes, best perf).
- * - Multi pane: renders iframes so each has its own document + localStorage namespace.
- * - Users can drag the vertical dividers to resize each pane.
+ * - Two panes: renders iframes so each has its own document + localStorage namespace.
+ * - Users can drag the vertical divider to resize.
  */
 export default function SplitView() {
-  // If we're inside an iframe (namespace given), render only the ruler.
   const isChild = (() => {
     try {
       if (new URLSearchParams(window.location.search).get("ns")) return true;
@@ -17,15 +16,14 @@ export default function SplitView() {
     } catch { return false; }
   })();
 
-  const [panes, setPanes] = useState(1); // 1 | 2 | 3
-  const [sizes, setSizes] = useState([100]); // flex percentages that sum to 100
+  const [panes, setPanes] = useState(1); // 1 | 2
+  const [sizes, setSizes] = useState([100]);
   const containerRef = useRef(null);
   const dragRef = useRef(null);
 
   useEffect(() => {
     if (panes === 1) setSizes([100]);
-    else if (panes === 2) setSizes([50, 50]);
-    else setSizes([34, 33, 33]);
+    else setSizes([50, 50]);
   }, [panes]);
 
   const beginDrag = (idx) => (e) => {
@@ -64,7 +62,7 @@ export default function SplitView() {
   if (isChild) return <ManuscriptRuler />;
 
   // Compute iframe URLs. Use base + `?ns=A|B|C` so each pane gets its own localStorage.
-  const paneKeys = ["A", "B", "C"].slice(0, panes);
+  const paneKeys = ["A", "B"].slice(0, panes);
   const baseHref = (() => {
     try {
       const u = new URL(window.location.href);
@@ -95,14 +93,6 @@ export default function SplitView() {
           title="مخطوطان جنباً إلى جنب"
         >
           <Columns size={14} /> مخطوطان
-        </button>
-        <button
-          className={`mr-btn ${panes === 3 ? "mr-btn-active" : ""}`}
-          onClick={() => setPanes(3)}
-          data-testid="sv-panes-3"
-          title="ثلاثة مخطوطات"
-        >
-          <LayoutPanelTop size={14} /> ثلاثة
         </button>
         <span className="sv-bar-hint">اسحب الحدّ الفاصل لضبط حجم كل مخطوط</span>
       </div>
