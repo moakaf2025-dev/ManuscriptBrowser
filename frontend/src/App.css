@@ -186,6 +186,106 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .mr-ruler-line .mr-ruler-edge { background: currentColor; opacity: 0.9; height: 2px; }
 .mr-ruler-parallelogram { transform-origin: center; }
 
+/* Bubble comments */
+.mr-bubble {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--amber);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 8;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  transition: transform 0.12s;
+}
+.mr-bubble:hover { transform: translate(-50%, -50%) scale(1.15); }
+.mr-bubble-pop {
+  position: absolute;
+  top: 34px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 220px;
+  max-width: 320px;
+  background: var(--ink-2);
+  border: 1px solid var(--amber);
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.55);
+  color: var(--parchment);
+  z-index: 20;
+  text-align: start;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.mr-bubble-text {
+  color: var(--parchment);
+  white-space: pre-wrap;
+  margin-bottom: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.mr-bubble-meta {
+  color: var(--amber);
+  font-size: 11px;
+  padding: 3px 0;
+  border-top: 1px dashed var(--line);
+}
+.mr-bubble-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.mr-bubble-actions .mr-btn { padding: 3px 8px; font-size: 11px; }
+
+/* Thumbs strip resizer */
+.mr-thumbs-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  inset-inline-end: -3px;
+  width: 6px;
+  cursor: ew-resize;
+  background: transparent;
+  z-index: 20;
+  transition: background 0.15s;
+}
+.mr-thumbs-resizer:hover { background: var(--amber-2); }
+
+/* Floating pause button (visible when ruler auto-scroll is playing) */
+.mr-floating-pause {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 22px;
+  background: linear-gradient(135deg, var(--danger), #8b3a2f);
+  color: #fff;
+  border: 2px solid #fff8;
+  border-radius: 30px;
+  cursor: pointer;
+  font-family: 'Amiri', serif;
+  font-size: 15px;
+  font-weight: 700;
+  box-shadow: 0 15px 40px rgba(200,90,74,0.5), 0 0 25px rgba(200,90,74,0.35);
+  animation: mrPulse 1.6s ease-in-out infinite;
+}
+.mr-floating-pause:hover { filter: brightness(1.1); }
+@keyframes mrPulse {
+  0%, 100% { transform: translateX(-50%) scale(1); }
+  50% { transform: translateX(-50%) scale(1.05); }
+}
+
 .mr-ruler.dragging { cursor: grabbing; }
 
 .mr-ruler-band {
@@ -821,6 +921,44 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   background: var(--line);
   margin: 3px 6px;
 }
+/* Popover X close button */
+.mr-pop-x {
+  position: absolute;
+  top: 6px;
+  inset-inline-end: 6px;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  background: var(--ink-3);
+  color: var(--parchment-soft);
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.mr-pop-x:hover { color: var(--amber); background: var(--ink); }
+/* Modal X close button */
+.mr-modal-x {
+  position: absolute;
+  top: 12px;
+  inset-inline-end: 12px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  background: var(--ink-3);
+  color: var(--parchment-soft);
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 5;
+  transition: color 0.12s, background 0.12s;
+}
+.mr-modal-x:hover { color: var(--amber); background: var(--ink); }
+.mr-shortcuts-card { position: relative; }
 
 /* ============ SplitView ============ */
 .sv-root {

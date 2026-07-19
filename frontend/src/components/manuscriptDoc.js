@@ -66,28 +66,31 @@ function createSplittingDoc(baseDoc, opts = {}) {
   const rangeFrom = Math.max(1, Math.min(totalBase, opts.range?.from || 1));
   const rangeTo = Math.max(rangeFrom, Math.min(totalBase, opts.range?.to || totalBase));
   const foldCache = new Map();
+  // overridesRef: either a Map, plain object, or a ref-like { current: {...} }.
+  // Values in the object should be numeric ratios (0..1) per basePage number.
+  const overridesRef = opts.overridesRef || null;
 
-  const splitCount = rangeTo - rangeFrom + 1; // pages that get split
-  const numPages = totalBase + splitCount; // each split adds 1 extra
+  const getOverride = (basePage) => {
+    if (!overridesRef) return null;
+    const src = overridesRef.current || overridesRef;
+    if (src instanceof Map) return src.has(basePage) ? src.get(basePage) : null;
+    if (src && typeof src === "object" && src[basePage] != null) return src[basePage];
+    return null;
+  };
 
-  // Map virtual page number (1-based in the wrapped doc) to base page + optional side
+  const splitCount = rangeTo - rangeFrom + 1;
+  const numPages = totalBase + splitCount;
+
   function resolve(virt) {
-    // Pages before range: 1:1 mapping
     if (virt < rangeFrom) return { basePage: virt, split: false };
-    // Within split range (each base becomes 2)
     const rangeStartVirt = rangeFrom;
     const rangeSize = splitCount * 2;
     if (virt <= rangeStartVirt + rangeSize - 1) {
-      const offset = virt - rangeStartVirt; // 0-based
-      const baseOffset = Math.floor(offset / 2); // which base page within range
-      const side = offset % 2; // 0 = first, 1 = second
-      return {
-        basePage: rangeFrom + baseOffset,
-        split: true,
-        side, // 0 = first (right in RTL)
-      };
+      const offset = virt - rangeStartVirt;
+      const baseOffset = Math.floor(offset / 2);
+      const side = offset % 2;
+      return { basePage: rangeFrom + baseOffset, split: true, side };
     }
-    // After range: shift back by splitCount extras
     return { basePage: virt - splitCount, split: false };
   }
 
@@ -97,18 +100,25 @@ function createSplittingDoc(baseDoc, opts = {}) {
     _base: baseDoc,
     _rtl: rtl,
     _range: { from: rangeFrom, to: rangeTo },
+    _foldCache: foldCache,
+    _overridesRef: overridesRef,
     resolve,
     getPage: async (virtPageNum) => {
       const { basePage, split, side } = resolve(virtPageNum);
       const basePageObj = await baseDoc.getPage(basePage);
 
       if (!split) {
-        return basePageObj; // pass-through
+        return basePageObj;
       }
 
-      // Detect fold for this base page (cached)
-      let foldRatio = foldCache.get(basePage);
-      if (foldRatio == null) {
+      // Priority: manual override > cached auto-detect > run detection
+      const override = getOverride(basePage);
+      let foldRatio;
+      if (override != null) {
+        foldRatio = override;
+      } else if (foldCache.has(basePage)) {
+        foldRatio = foldCache.get(basePage);
+      } else {
         const bv = basePageObj.getViewport({ scale: 1, rotation: 0 });
         const off = document.createElement("canvas");
         off.width = Math.min(1200, Math.floor(bv.width));
@@ -125,16 +135,23 @@ function createSplittingDoc(baseDoc, opts = {}) {
 
       return {
         _basePage: basePageObj,
+        _basePageNum: basePage,
         _foldRatio: foldRatio,
+        _isOverride: override != null,
         _isRight: isRight,
         getViewport: ({ scale = 1, rotation = 0 } = {}) => {
+          // Always read the LATEST override at call-time (so slider updates take effect)
+          const latest = getOverride(basePage);
+          const effective = latest != null ? latest : foldRatio;
           const bv = basePageObj.getViewport({ scale, rotation });
-          const w = isRight ? bv.width * (1 - foldRatio) : bv.width * foldRatio;
+          const w = isRight ? bv.width * (1 - effective) : bv.width * effective;
           return { width: w, height: bv.height, scale, rotation };
         },
         render: ({ canvasContext, viewport }) => {
           return {
             promise: (async () => {
+              const latest = getOverride(basePage);
+              const effective = latest != null ? latest : foldRatio;
               const { rotation = 0, scale } = viewport;
               const bv = basePageObj.getViewport({ scale, rotation });
               const off = document.createElement("canvas");
@@ -142,7 +159,7 @@ function createSplittingDoc(baseDoc, opts = {}) {
               off.height = Math.floor(bv.height);
               const offCtx = off.getContext("2d");
               await basePageObj.render({ canvasContext: offCtx, viewport: bv }).promise;
-              const foldPx = bv.width * foldRatio;
+              const foldPx = bv.width * effective;
               if (isRight) {
                 const sw = bv.width - foldPx;
                 canvasContext.drawImage(off, foldPx, 0, sw, bv.height, 0, 0, sw, bv.height);
@@ -256,7 +273,7 @@ export async function unpackArchive(file) {
 // ------------------- Builder API -------------------
 const ARCHIVE_EXT = /\.(rar|7z|tar|tar\.gz|tgz|tar\.bz2)$/i;
 
-export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = false, splitRange } = {}) {
+export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = false, splitRange, overridesRef } = {}) {
   const name = file.name.toLowerCase();
   let base;
 
@@ -304,12 +321,12 @@ export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = fal
     throw new Error("صيغة غير مدعومة (المدعوم: PDF، صور، ZIP، RAR، 7z، TAR)");
   }
 
-  return splitPages ? createSplittingDoc(base, { rtl: true, range: splitRange }) : base;
+  return splitPages ? createSplittingDoc(base, { rtl: true, range: splitRange, overridesRef }) : base;
 }
 
 // Wrap an already-loaded base doc with splitting on/off dynamically
-export function toggleSplitDoc(baseDoc, split, splitRange) {
-  if (split) return createSplittingDoc(baseDoc, { rtl: true, range: splitRange });
+export function toggleSplitDoc(baseDoc, split, splitRange, overridesRef) {
+  if (split) return createSplittingDoc(baseDoc, { rtl: true, range: splitRange, overridesRef });
   return baseDoc;
 }
 
@@ -346,13 +363,13 @@ export async function compressImage(source, { maxSize = 2000, quality = 0.82, mi
 }
 
 // ------------------- Export full doc as PDF -------------------
-export async function exportDocAsPdf(doc, { PDFDocument, maxSize = 2000, quality = 0.82, onProgress } = {}) {
+export async function exportDocAsPdf(doc, { PDFDocument, maxSize = 4000, quality = 0.95, onProgress } = {}) {
   const pdfDoc = await PDFDocument.create();
   for (let i = 1; i <= doc.numPages; i++) {
     if (onProgress) onProgress(i, doc.numPages);
     const page = await doc.getPage(i);
     const vp = page.getViewport({ scale: 1, rotation: 0 });
-    const targetScale = Math.min(1, maxSize / Math.max(vp.width, vp.height));
+    const targetScale = Math.min(2, maxSize / Math.max(vp.width, vp.height));
     const rvp = page.getViewport({ scale: targetScale, rotation: 0 });
     const off = document.createElement("canvas");
     off.width = Math.floor(rvp.width);

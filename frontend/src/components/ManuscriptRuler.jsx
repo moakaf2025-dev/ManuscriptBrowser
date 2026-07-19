@@ -111,8 +111,8 @@ const DEFAULT_STATE = {
   folioMode: true,
   folioStart: 1,
   folioOffset: 0,
-  exportMaxSize: 2000,
-  exportQuality: 82,
+  exportMaxSize: 4000,
+  exportQuality: 95,
   exportFormat: "zip",
 };
 
@@ -225,6 +225,9 @@ export default function ManuscriptRuler() {
   const [tabs, setTabs] = useState([]);
   const [headingsMap, setHeadingsMap] = useState(() => loadKV(HEADINGS_KEY));
   const [foldOverridesMap, setFoldOverridesMap] = useState(() => loadKV(FOLD_OVERRIDES_KEY));
+  // A stable ref that createSplittingDoc will read from at render-time, so slider
+  // adjustments take effect without recreating the doc every keystroke.
+  const foldOverridesForCurrentFileRef = useRef({});
   const [showHeadings, setShowHeadings] = useState(false);
   const [showThumbs, setShowThumbs] = useState(false);
   const [thumbUrls, setThumbUrls] = useState([]);
@@ -235,6 +238,11 @@ export default function ManuscriptRuler() {
     try { return JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]"); } catch { return []; }
   });
   const [thumbsDirection, setThumbsDirection] = useState("vertical"); // 'vertical' | 'horizontal'
+  const [thumbsWidth, setThumbsWidth] = useState(() => {
+    const v = Number(localStorage.getItem("mrThumbsWidth" + _NS_SUFFIX));
+    return v > 80 && v < 800 ? v : 150;
+  });
+  const thumbsDragRef = useRef(null);
   const [headingModal, setHeadingModal] = useState(null); // {editingId?, page, title, level}
   const [toast, setToast] = useState("");
 
@@ -310,6 +318,7 @@ export default function ManuscriptRuler() {
   const openAddCommentRef = useRef(() => {});
   const openAddHeadingRef = useRef(() => {});
   const snipRef = useRef(() => {});
+  const renderPageRef = useRef(() => {});
 
   useEffect(() => {
     stateRef.current = state;
@@ -342,7 +351,9 @@ export default function ManuscriptRuler() {
 
   useEffect(() => {
     saveKV(FOLD_OVERRIDES_KEY, foldOverridesMap);
-  }, [foldOverridesMap]);
+    // Keep the "current file" ref in sync so createSplittingDoc reads latest overrides.
+    foldOverridesForCurrentFileRef.current = foldOverridesMap[state.fileKey] || {};
+  }, [foldOverridesMap, state.fileKey]);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -499,9 +510,34 @@ export default function ManuscriptRuler() {
 
   useEffect(() => {
     if (doc) renderPage(state.page);
-  }, [doc, state.page, state.rotation, state.zoomIdx, renderPage]);
+    renderPageRef.current = renderPage;
+  }, [doc, state.page, state.rotation, state.zoomIdx, state.invertR, state.invertG, state.invertB, state.sharpen, state.denoise, renderPage]);
 
-  // Auto-bookmark: save current position on unload / tab hide
+  // Thumbs strip drag-resize
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!thumbsDragRef.current) return;
+      const isRtl = getComputedStyle(document.body).direction === "rtl";
+      const dx = e.clientX - thumbsDragRef.current.startX;
+      // in RTL, moving mouse LEFT expands the right-side strip. But our strip is at inset-inline-start (RTL: right).
+      // So dragging left (dx negative) means EXPAND. Compute accordingly.
+      const delta = isRtl ? -dx : dx;
+      const next = Math.min(600, Math.max(90, thumbsDragRef.current.startW + delta));
+      setThumbsWidth(next);
+    };
+    const onUp = () => {
+      if (thumbsDragRef.current) {
+        try { localStorage.setItem("mrThumbsWidth" + _NS_SUFFIX, String(thumbsWidth)); } catch {}
+      }
+      thumbsDragRef.current = null;
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [thumbsWidth]);
   useEffect(() => {
     const persist = () => {
       if (!state.fileKey) return;
@@ -522,6 +558,11 @@ export default function ManuscriptRuler() {
       window.removeEventListener("pagehide", persist);
     };
   }, [state.fileKey, state.page, state.rulerY]);
+
+  // Auto-hide grouped popovers when ruler auto-scroll is playing
+  useEffect(() => {
+    if (state.rulerAutoPlaying) setOpenGroup(null);
+  }, [state.rulerAutoPlaying]);
 
   // Refresh recents whenever storage changes locally
   useEffect(() => {
@@ -600,11 +641,58 @@ export default function ManuscriptRuler() {
     };
   }, [clampRuler]);
 
+  // Hand-tool + bubble-comment click state
+  const [handTool, setHandTool] = useState(false);
+  const [bubbleAddMode, setBubbleAddMode] = useState(false);
+  const [activeBubbleId, setActiveBubbleId] = useState(null);
+  const panDragRef = useRef(null);
+
+  const onPageMouseDown = (e) => {
+    if (e.target.closest("[data-ruler]")) return;
+    if (e.target.closest("[data-bubble]")) return;
+    if (handTool && scrollRef.current) {
+      e.preventDefault();
+      panDragRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        scrollL: scrollRef.current.scrollLeft,
+        scrollT: scrollRef.current.scrollTop,
+      };
+    }
+  };
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!panDragRef.current || !scrollRef.current) return;
+      const dx = e.clientX - panDragRef.current.startX;
+      const dy = e.clientY - panDragRef.current.startY;
+      scrollRef.current.scrollLeft = panDragRef.current.scrollL - dx;
+      scrollRef.current.scrollTop = panDragRef.current.scrollT - dy;
+    };
+    const onUp = () => { panDragRef.current = null; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
   const onPageClick = (e) => {
     if (!pageWrapRef.current) return;
-    // ignore if clicking the ruler itself
+    setOpenGroup(null); // auto-close any open popover on manuscript click
     if (e.target.closest("[data-ruler]")) return;
+    if (e.target.closest("[data-bubble]")) return; // bubble handles its own click
     const rect = pageWrapRef.current.getBoundingClientRect();
+    if (bubbleAddMode) {
+      // Place a new comment bubble at (rx, ry) as ratios of the page
+      const rx = (e.clientX - rect.left) / rect.width;
+      const ry = (e.clientY - rect.top) / rect.height;
+      setBubbleAddMode(false);
+      setCommentModal({ editingId: null, page: state.page, text: "", bubble: true, x: rx, y: ry });
+      return;
+    }
+    if (handTool) return; // hand tool: click just closes popover, no ruler move
     const y = e.clientY - rect.top - state.rulerHeight / 2;
     setState((s) => ({ ...s, rulerY: clampRuler(y) }));
   };
@@ -642,7 +730,7 @@ export default function ManuscriptRuler() {
     setLoadingMsg(next ? "جارٍ الكشف عن خط طي الصفحات…" : "جارٍ استعادة الصفحات الأصلية…");
     try {
       const range = { from: state.splitFrom, to: Math.min(state.splitTo, baseDoc.numPages) };
-      const wrapped = toggleSplitDoc(baseDoc, next, range);
+      const wrapped = toggleSplitDoc(baseDoc, next, range, foldOverridesForCurrentFileRef);
       setDoc(wrapped);
       setPageCount(wrapped.numPages);
       setState((s) => ({
@@ -667,7 +755,7 @@ export default function ManuscriptRuler() {
     setLoadingMsg("جارٍ إعادة تطبيق التقسيم…");
     try {
       const range = { from, to: Math.min(to, baseDoc.numPages) };
-      const wrapped = toggleSplitDoc(baseDoc, true, range);
+      const wrapped = toggleSplitDoc(baseDoc, true, range, foldOverridesForCurrentFileRef);
       setDoc(wrapped);
       setPageCount(wrapped.numPages);
       setState((s) => ({ ...s, splitFrom: from, splitTo: to, page: 1, rulerY: 0 }));
@@ -923,14 +1011,15 @@ export default function ManuscriptRuler() {
     try {
       const { PDFDocument, PDFName, PDFDict, PDFArray, PDFRef, PDFHexString, PDFString } = await import("pdf-lib");
       const pdfDoc = await PDFDocument.create();
-      const quality = state.exportQuality / 100;
-      const maxSize = state.exportMaxSize;
+      const quality = 0.95; // high JPEG quality — preserve source resolution as much as possible
+      const maxSize = 4000; // allow up to 4000px longest side (was capped too aggressively)
       const pageRefs = [];
       for (let i = 1; i <= pageCount; i++) {
         setLoadingMsg(`تجهيز صفحة ${i} / ${pageCount}…`);
         const page = await doc.getPage(i);
         const vp = page.getViewport({ scale: 1, rotation: 0 });
-        const targetScale = Math.min(1, maxSize / Math.max(vp.width, vp.height));
+        // Use the ORIGINAL resolution up to 4000px (no downscaling for typical manuscript scans)
+        const targetScale = Math.min(2, maxSize / Math.max(vp.width, vp.height));
         const rvp = page.getViewport({ scale: targetScale, rotation: 0 });
         const off = document.createElement("canvas");
         off.width = Math.floor(rvp.width);
@@ -1016,22 +1105,24 @@ export default function ManuscriptRuler() {
 
   const openAddComment = () => {
     if (!state.fileKey) return;
-    const folio = state.folioMode
-      ? formatFolio(state.page, { startFolio: state.folioStart, offset: state.folioOffset })
-      : `صفحة ${state.page}`;
-    const line = Math.max(1, Math.round(state.rulerY / Math.max(1, state.rulerStep)) + 1);
-    setCommentModal({
-      editingId: null,
-      page: state.page,
-      folio,
-      line,
-      y: state.rulerY,
-      text: "",
-    });
+    // Enter bubble-add mode: user clicks anywhere on the manuscript to place the comment
+    setBubbleAddMode(true);
+    setOpenGroup(null);
+    showToast("انقر على أي موضع في المخطوط لوضع تعليق");
   };
 
   const openEditComment = (c) => {
-    setCommentModal({ editingId: c.id, page: c.page, folio: c.folio, line: c.line || 1, y: c.y, text: c.text });
+    const folio = c.folio || formatFolio(c.page, { startFolio: state.folioStart, offset: state.folioOffset });
+    setCommentModal({
+      editingId: c.id,
+      page: c.page,
+      folio,
+      line: c.line || 1,
+      y: c.y,
+      x: c.x,
+      bubble: c.x != null,
+      text: c.text,
+    });
   };
 
   const saveComment = (text) => {
@@ -1044,6 +1135,7 @@ export default function ManuscriptRuler() {
       setCommentModal(null);
       return;
     }
+    const folio = commentModal.folio || formatFolio(commentModal.page, { startFolio: state.folioStart, offset: state.folioOffset });
     setCommentsMap((m) => {
       const list = m[state.fileKey] || [];
       if (commentModal.editingId) {
@@ -1055,9 +1147,10 @@ export default function ManuscriptRuler() {
       const newComment = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         page: commentModal.page,
-        folio: commentModal.folio,
+        folio,
         line: commentModal.line,
         y: commentModal.y,
+        x: commentModal.x, // ratio 0..1 for bubble comments (undefined = old line-based)
         text: t,
         createdAt: new Date().toISOString(),
       };
@@ -1065,6 +1158,22 @@ export default function ManuscriptRuler() {
     });
     setCommentModal(null);
     showToast(commentModal.editingId ? "تم تعديل التعليق" : "أُضيف التعليق");
+  };
+
+  const copyCommentCitation = async (c) => {
+    const info = currentInfo;
+    const parts = [];
+    if (info.library) parts.push(info.library);
+    if (info.number) parts.push(info.number);
+    parts.push(`ورقة ${c.folio || formatFolio(c.page, { startFolio: state.folioStart, offset: state.folioOffset })}`);
+    const citation = `(${parts.join(" ")})`;
+    const full = `${c.text}\n\n${citation}`;
+    try {
+      await navigator.clipboard.writeText(full);
+      showToast("نُسخ التعليق مع العزو");
+    } catch {
+      showToast("تعذّر النسخ");
+    }
   };
 
   const deleteComment = (id) => {
@@ -1075,8 +1184,9 @@ export default function ManuscriptRuler() {
   };
 
   const goToComment = (c) => {
-    setState((s) => ({ ...s, page: c.page, rulerY: c.y }));
+    setState((s) => ({ ...s, page: c.page, rulerY: c.y != null ? c.y : s.rulerY }));
     setShowComments(false);
+    if (c.x != null) setActiveBubbleId(c.id);
   };
 
   const exportHeadingsAsWord = () => {
@@ -1268,6 +1378,14 @@ ${sorted.length === 0
       if (e.ctrlKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
         openFile();
+        return;
+      }
+      // Space toggles ruler auto-scroll
+      if (e.code === "Space" || e.key === " ") {
+        if (hasFileRef.current) {
+          e.preventDefault();
+          setState((s) => ({ ...s, rulerAutoPlaying: !s.rulerAutoPlaying }));
+        }
         return;
       }
       if (e.ctrlKey && e.key.toLowerCase() === "b") {
@@ -1471,6 +1589,7 @@ ${sorted.length === 0
           </button>
           {openGroup === "open" && (
             <div className="mr-popover" data-testid="mr-pop-open">
+              <button className="mr-pop-x" onClick={() => setOpenGroup(null)} data-testid="mr-pop-open-close" title="إغلاق"><X size={14} /></button>
               <div className="mr-pop-title">آخر المخطوطات ({recentFiles.length}):</div>
               {recentFiles.length === 0 && <div className="mr-pop-empty">لا توجد ملفات سابقة</div>}
               {recentFiles.slice(0, 5).map((r) => (
@@ -1479,7 +1598,9 @@ ${sorted.length === 0
                   <span title={r.name}>{r.name.length > 34 ? r.name.slice(0, 32) + "…" : r.name}</span>
                 </div>
               ))}
-              <div className="mr-pop-hint">اضغط «فتح مخطوط» أعلاه لاختيار ملف جديد. أسماء الملفات السابقة تظهر هنا للتذكير.</div>
+              <div className="mr-pop-hint">
+                أسماء الملفات السابقة تظهر هنا للتذكير. لأسباب أمنية، لا يستطيع المتصفح فتح الملفات تلقائياً — اضغط «فتح مخطوط» أعلاه لاختيار ملف.
+              </div>
             </div>
           )}
         </div>
@@ -1506,6 +1627,7 @@ ${sorted.length === 0
           </button>
           {openGroup === "card" && (
             <div className="mr-popover" data-testid="mr-pop-card">
+              <button className="mr-pop-x" onClick={() => setOpenGroup(null)} title="إغلاق"><X size={14} /></button>
               <button className="mr-pop-item" onClick={() => { setShowInfoEditor(true); setOpenGroup(null); }} data-testid="mr-pop-card-edit">
                 <Edit3 size={13} /> تحرير البطاقة
               </button>
@@ -1534,11 +1656,23 @@ ${sorted.length === 0
           </button>
           {openGroup === "browse" && (
             <div className="mr-popover mr-popover-wide" data-testid="mr-pop-browse">
+              <button className="mr-pop-x" onClick={() => setOpenGroup(null)} title="إغلاق"><X size={14} /></button>
               <div className="mr-pop-title">التكبير: {Math.round(scale * 100)}%</div>
               <div className="mr-pop-row">
                 <button className="mr-btn" onClick={zoomOut} data-testid="mr-btn-zoom-out"><ZoomOut size={14} /> تصغير</button>
                 <button className="mr-btn" onClick={zoomIn} data-testid="mr-btn-zoom-in"><ZoomIn size={14} /> تكبير</button>
                 <button className="mr-btn" onClick={rotate} data-testid="mr-btn-rotate"><RotateCw size={14} /> تدوير</button>
+              </div>
+              <div className="mr-pop-row">
+                <button
+                  className={`mr-btn ${handTool ? "mr-btn-active" : ""}`}
+                  onClick={() => setHandTool((v) => !v)}
+                  data-testid="mr-btn-hand"
+                  title="أداة اليد: اسحب المخطوط للتنقل عند التكبير"
+                  style={{ flex: 1, justifyContent: "center" }}
+                >
+                  ✋ {handTool ? "أوقف أداة اليد" : "أداة اليد (للتنقل)"}
+                </button>
               </div>
               <div className="mr-pop-title">فلاتر الصورة:</div>
               <div className="mr-field">
@@ -1578,12 +1712,7 @@ ${sorted.length === 0
               <div className="mr-pop-title">شريط مصغّرات الصفحات:</div>
               <div className="mr-pop-row">
                 <button className={`mr-btn ${showThumbs ? "mr-btn-active" : ""}`} onClick={() => setShowThumbs((v) => !v)} data-testid="mr-btn-thumbs">
-                  <LayoutGrid size={13} /> {showThumbs ? "إخفاء" : "إظهار"}
-                </button>
-                <button className={`mr-btn ${thumbsDirection === "horizontal" ? "mr-btn-active" : ""}`}
-                  onClick={() => setThumbsDirection(thumbsDirection === "horizontal" ? "vertical" : "horizontal")}
-                  data-testid="mr-btn-thumbs-dir">
-                  {thumbsDirection === "horizontal" ? "أفقي" : "عمودي"}
+                  <LayoutGrid size={13} /> {showThumbs ? "إخفاء المصغّرات" : "إظهار المصغّرات"}
                 </button>
               </div>
             </div>
@@ -1626,6 +1755,7 @@ ${sorted.length === 0
           </button>
           {openGroup === "ruler" && (
             <div className="mr-popover mr-popover-wide" data-testid="mr-pop-ruler">
+              <button className="mr-pop-x" onClick={() => setOpenGroup(null)} title="إغلاق"><X size={14} /></button>
               <div className="mr-pop-title">شكل المسطرة:</div>
               <div className="mr-pop-row">
                 {[
@@ -1721,6 +1851,7 @@ ${sorted.length === 0
           </button>
           {openGroup === "comment" && (
             <div className="mr-popover" data-testid="mr-pop-comment">
+              <button className="mr-pop-x" onClick={() => setOpenGroup(null)} title="إغلاق"><X size={14} /></button>
               <button className="mr-pop-item" onClick={() => { openAddComment(); setOpenGroup(null); }} data-testid="mr-pop-add-comment">
                 <MessageSquarePlus size={13} /> إضافة تعليق (Ctrl+F)
               </button>
@@ -1760,6 +1891,7 @@ ${sorted.length === 0
           </button>
           {openGroup === "export" && (
             <div className="mr-popover" data-testid="mr-pop-export">
+              <button className="mr-pop-x" onClick={() => setOpenGroup(null)} title="إغلاق"><X size={14} /></button>
               <button className="mr-pop-item" onClick={() => { setState((s) => ({ ...s, exportFormat: "zip" })); setShowExport(true); setOpenGroup(null); }} data-testid="mr-exp-zip">
                 <Archive size={13} /> صور مقصوصة (ZIP) — للذكاء الاصطناعي
               </button>
@@ -1892,7 +2024,12 @@ ${sorted.length === 0
               className="mr-page-wrap"
               ref={pageWrapRef}
               onClick={onPageClick}
-              style={{ width: pageSize.w || undefined, height: pageSize.h || undefined }}
+              onMouseDown={onPageMouseDown}
+              style={{
+                width: pageSize.w || undefined,
+                height: pageSize.h || undefined,
+                cursor: bubbleAddMode ? "crosshair" : (handTool ? (panDragRef.current ? "grabbing" : "grab") : undefined),
+              }}
               data-testid="mr-page-wrap"
             >
               <div
@@ -1959,6 +2096,38 @@ ${sorted.length === 0
                   </div>
                 );
               })()}
+
+              {/* Bubble comments layer */}
+              {currentComments.filter((c) => c.page === state.page && c.x != null).map((c) => (
+                <div
+                  key={c.id}
+                  data-bubble
+                  className="mr-bubble"
+                  style={{
+                    left: `${c.x * 100}%`,
+                    top: `${c.y * 100}%`,
+                  }}
+                  title={c.text}
+                  data-testid="mr-bubble"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveBubbleId(activeBubbleId === c.id ? null : c.id);
+                  }}
+                >
+                  <MessageSquarePlus size={16} />
+                  {activeBubbleId === c.id && (
+                    <div className="mr-bubble-pop" onClick={(e) => e.stopPropagation()}>
+                      <div className="mr-bubble-text">{c.text}</div>
+                      <div className="mr-bubble-meta">{c.folio || `صفحة ${c.page}`}</div>
+                      <div className="mr-bubble-actions">
+                        <button className="mr-btn" onClick={() => copyCommentCitation(c)} data-testid="mr-bubble-copy"><Copy size={11} /> نسخ مع العزو</button>
+                        <button className="mr-btn" onClick={() => { setActiveBubbleId(null); openEditComment(c); }} data-testid="mr-bubble-edit"><Edit3 size={11} /> تعديل</button>
+                        <button className="mr-btn" onClick={() => { deleteComment(c.id); setActiveBubbleId(null); }} data-testid="mr-bubble-delete" style={{ color: "var(--danger)" }}><Trash2 size={11} /> حذف</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -2264,33 +2433,47 @@ ${sorted.length === 0
               const activeBasePage = Math.ceil(state.page / 2);
               const overrides = foldOverridesMap[state.fileKey] || {};
               const current = overrides[activeBasePage];
-              const displayVal = current != null ? Math.round(current * 100) : 50;
+              // Read auto-detected value from the doc's cache if no override yet
+              let autoVal = 50;
+              if (current == null && doc && doc._foldCache && doc._foldCache.has(activeBasePage)) {
+                autoVal = Math.round(doc._foldCache.get(activeBasePage) * 100);
+              }
+              const displayVal = current != null ? Math.round(current * 100) : autoVal;
               return (
                 <div className="mr-field">
-                  <label>موضع القص للورقة {activeBasePage} <span className="val">{displayVal}%</span></label>
-                  <input type="range" min="20" max="80" value={displayVal}
+                  <label>
+                    موضع القص للورقة {activeBasePage}
+                    <span className="val">{displayVal}%{current == null ? " (تلقائي)" : " (يدوي)"}</span>
+                  </label>
+                  <input
+                    type="range" min="10" max="90" step="0.5" value={displayVal}
                     onChange={(e) => {
                       const v = Number(e.target.value) / 100;
                       setFoldRatio(activeBasePage, v);
-                      if (baseDoc && state.splitPages) {
-                        const range = { from: state.splitFrom, to: Math.min(state.splitTo, baseDoc.numPages) };
-                        const wrapped = toggleSplitDoc(baseDoc, true, range);
-                        const origGetPage = wrapped.getPage.bind(wrapped);
-                        wrapped.getPage = async (n) => {
-                          const p = await origGetPage(n);
-                          if (p._foldRatio != null) {
-                            const bp = Math.ceil((n - state.splitFrom + 1) / 2) + state.splitFrom - 1;
-                            const o = (foldOverridesMap[state.fileKey] || {})[bp];
-                            if (o != null) p._foldRatio = o;
-                          }
-                          return p;
-                        };
-                        setDoc(wrapped);
-                      }
+                      // Force re-render so getViewport/render read the new override
+                      if (renderPageRef.current) renderPageRef.current(state.page);
                     }}
-                    data-testid="mr-fold-manual" />
+                    data-testid="mr-fold-manual"
+                  />
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <button
+                      className="mr-btn"
+                      onClick={() => {
+                        setFoldOverridesMap((m) => {
+                          const cp = { ...(m[state.fileKey] || {}) };
+                          delete cp[activeBasePage];
+                          return { ...m, [state.fileKey]: cp };
+                        });
+                        if (renderPageRef.current) renderPageRef.current(state.page);
+                      }}
+                      style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                      data-testid="mr-fold-reset"
+                    >
+                      <RotateCcw size={12} /> استعادة التلقائي
+                    </button>
+                  </div>
                   <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
-                    تنقّل بين الصفحات باستخدام أسهم المتصفح، ثم اضبط الورقة الحالية إن فشل الكشف الذكي.
+                    تنقّل بين الصفحات المزدوجة باستخدام أزرار الصفحات، ثم اضبط الشريط لهذه الورقة. سيُحفظ الضبط تلقائياً لكل ورقة على حِدَة.
                   </div>
                 </div>
               );
@@ -2353,136 +2536,6 @@ ${sorted.length === 0
           </div>
         )}
 
-        {false && showFolioSettings && (
-          <div style={{ display: "none" }} data-testid="mr-folio-settings-old">
-            <h3>ترقيم المخطوط + مدى التقسيم</h3>
-
-            <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.7 }}>
-              <b style={{ color: "var(--amber)" }}>كيف يعمل الترقيم؟</b>
-              <br />
-              في علم المخطوطات، كل ورقة لها وجهان: <b>a</b> (recto/الوجه الأيمن) و <b>b</b> (verso/الوجه الأيسر). فالورقة الأولى صفحتاها <b>1a</b> ثم <b>1b</b>، ثم <b>2a</b> و <b>2b</b>… وهكذا.
-              <br /><br />
-              إذا كان في بداية الملف صفحات غلاف أو فهرسة قبل نص المخطوط، حدّد عددها في «صفحات الغلاف قبل بداية المخطوط»، فيبدأ الترقيم بعدها.
-              <br /><br />
-              مثال: لديك ملف فيه 3 صفحات غلاف قبل نص المخطوط، ضع القيمة 3، فتصير الصفحة الرابعة <b>1a</b>.
-            </div>
-
-            <div className="mr-field">
-              <label style={{ cursor: "pointer", flexDirection: "row", justifyContent: "space-between" }}>
-                <span>تفعيل ترقيم الفوليو</span>
-                <input
-                  type="checkbox"
-                  checked={state.folioMode}
-                  onChange={(e) => setState((s) => ({ ...s, folioMode: e.target.checked }))}
-                  data-testid="mr-folio-toggle"
-                  style={{ accentColor: "var(--amber)" }}
-                />
-              </label>
-            </div>
-
-            <div className="mr-field">
-              <label>رقم الفوليو الأول <span className="val">{state.folioStart}</span></label>
-              <input
-                type="number" min="1" value={state.folioStart}
-                onChange={(e) => setState((s) => ({ ...s, folioStart: Math.max(1, Number(e.target.value) || 1) }))}
-                data-testid="mr-folio-start"
-              />
-            </div>
-
-            <div className="mr-field">
-              <label>صفحات الغلاف قبل بداية المخطوط <span className="val">{state.folioOffset}</span></label>
-              <input
-                type="number" min="0" value={state.folioOffset}
-                onChange={(e) => setState((s) => ({ ...s, folioOffset: Math.max(0, Number(e.target.value) || 0) }))}
-                data-testid="mr-folio-offset"
-              />
-            </div>
-
-            <div style={{ fontSize: 12, color: "var(--muted)", padding: "6px 8px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)" }}>
-              الصفحة الحالية:{" "}
-              <span style={{ color: "var(--amber)", fontWeight: 600 }}>
-                {state.folioMode
-                  ? formatFolio(state.page, { startFolio: state.folioStart, offset: state.folioOffset })
-                  : `صفحة ${state.page}`}
-              </span>
-            </div>
-
-            <h3 style={{ marginTop: 6 }}>مدى التقسيم</h3>
-            <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.6 }}>
-              حدّد أول وآخر صفحة يُطبَّق عليها التقسيم (رقم الصفحة في <b>الملف الأصلي</b>). الصفحات خارج هذا المدى تبقى بدون تقسيم — مفيد إذا كانت أول صفحة (الغلاف) أو الأخيرة (كولوفون) بلا طية.
-            </div>
-
-            <div className="mr-field">
-              <label>ابدأ التقسيم من صفحة <span className="val">{state.splitFrom}</span></label>
-              <input
-                type="number" min="1"
-                value={state.splitFrom}
-                onChange={(e) => applySplitRange(Math.max(1, Number(e.target.value) || 1), state.splitTo)}
-                data-testid="mr-split-from"
-              />
-            </div>
-
-            <div className="mr-field">
-              <label>انتهِ عند صفحة <span className="val">{Math.min(state.splitTo, baseDoc?.numPages || state.splitTo)}</span></label>
-              <input
-                type="number" min="1"
-                value={state.splitTo}
-                onChange={(e) => applySplitRange(state.splitFrom, Math.max(state.splitFrom, Number(e.target.value) || state.splitFrom))}
-                data-testid="mr-split-to"
-              />
-            </div>
-
-            {baseDoc && (
-              <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                إجمالي صفحات الملف الأصلي: <b style={{ color: "var(--parchment)" }}>{baseDoc.numPages}</b>
-              </div>
-            )}
-
-            {state.splitPages && baseDoc && (
-              <>
-                <h3 style={{ marginTop: 6 }}>ضبط يدوي لخط الطي</h3>
-                <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "6px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.6 }}>
-                  إذا فشل الكشف الذكي لخط الطي في الصفحة الأصلية الحالية، يمكنك ضبط موضع القص يدوياً. القيمة 50% تعني منتصف الصفحة تماماً.
-                </div>
-                {(() => {
-                  const activeBasePage = Math.ceil(state.page / 2);
-                  const overrides = foldOverridesMap[state.fileKey] || {};
-                  const current = overrides[activeBasePage];
-                  const displayVal = current != null ? Math.round(current * 100) : 50;
-                  return (
-                    <div className="mr-field">
-                      <label>موضع القص للورقة {activeBasePage} <span className="val">{displayVal}%</span></label>
-                      <input type="range" min="20" max="80" value={displayVal}
-                        onChange={(e) => {
-                          const v = Number(e.target.value) / 100;
-                          setFoldRatio(activeBasePage, v);
-                          // trigger re-render by forcing doc reload
-                          if (baseDoc && state.splitPages) {
-                            const range = { from: state.splitFrom, to: Math.min(state.splitTo, baseDoc.numPages) };
-                            const wrapped = toggleSplitDoc(baseDoc, true, range);
-                            // Inject override lookup into wrapped
-                            const origGetPage = wrapped.getPage.bind(wrapped);
-                            wrapped.getPage = async (n) => {
-                              const p = await origGetPage(n);
-                              if (p._foldRatio != null) {
-                                const bp = Math.ceil((n - state.splitFrom + 1) / 2) + state.splitFrom - 1;
-                                const o = (foldOverridesMap[state.fileKey] || {})[bp];
-                                if (o != null) p._foldRatio = o;
-                              }
-                              return p;
-                            };
-                            setDoc(wrapped);
-                          }
-                        }}
-                        data-testid="mr-fold-manual"
-                      />
-                    </div>
-                  );
-                })()}
-              </>
-            )}
-          </div>
-        )}
 
         {showExport && (
           <div className="mr-settings mr-fade" data-testid="mr-export-panel" style={{ inset: "auto 10px 10px auto", top: 60, width: 320 }}>
@@ -2513,17 +2566,20 @@ ${sorted.length === 0
             <div className="mr-field">
               <label>أقصى بُعد للصورة <span className="val">{state.exportMaxSize}px</span></label>
               <input
-                type="range" min="800" max="3600" step="100"
+                type="range" min="800" max="6000" step="200"
                 value={state.exportMaxSize}
                 onChange={(e) => setState((s) => ({ ...s, exportMaxSize: Number(e.target.value) }))}
                 data-testid="mr-export-size"
               />
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                للحصول على أعلى جودة، اترك القيمة عند 4000 أو أكثر.
+              </div>
             </div>
 
             <div className="mr-field">
               <label>جودة JPEG <span className="val">{state.exportQuality}%</span></label>
               <input
-                type="range" min="50" max="95"
+                type="range" min="50" max="98"
                 value={state.exportQuality}
                 onChange={(e) => setState((s) => ({ ...s, exportQuality: Number(e.target.value) }))}
                 data-testid="mr-export-quality"
@@ -2806,7 +2862,11 @@ ${sorted.length === 0
 
         {/* Vertical thumbnails strip */}
         {showThumbs && hasFile && (
-          <div className={`mr-thumbs mr-thumbs-${thumbsDirection}`} data-testid="mr-thumbs-strip">
+          <div
+            className="mr-thumbs"
+            data-testid="mr-thumbs-strip"
+            style={{ width: thumbsWidth }}
+          >
             {thumbUrls.length === 0 && (
               <div style={{ padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>جارٍ إنشاء المصغّرات…</div>
             )}
@@ -2830,11 +2890,31 @@ ${sorted.length === 0
                 </div>
               );
             })}
+            <div
+              className="mr-thumbs-resizer"
+              data-testid="mr-thumbs-resizer"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                thumbsDragRef.current = { startX: e.clientX, startW: thumbsWidth };
+              }}
+              title="اسحب لتغيير حجم شريط المصغّرات"
+            />
           </div>
         )}
 
         {loading && <div className="mr-loading" data-testid="mr-loading">{loadingMsg}</div>}
         {toast && <div className="mr-toast" data-testid="mr-toast">{toast}</div>}
+        {state.rulerAutoPlaying && (
+          <button
+            className="mr-floating-pause"
+            onClick={() => setState((s) => ({ ...s, rulerAutoPlaying: false }))}
+            data-testid="mr-floating-pause"
+            title="إيقاف التمرير التلقائي (اضغط مسافة)"
+          >
+            <Pause size={22} />
+            <span>إيقاف · Space</span>
+          </button>
+        )}
 
         {bookmarkModal && (
           <BookmarkModal
@@ -2947,7 +3027,8 @@ function BookmarkModal({ initialLabel, onConfirm, onCancel }) {
 
   return (
     <div className="mr-shortcuts-panel" onClick={onCancel} data-testid="mr-bookmark-modal">
-      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420, position: "relative" }}>
+        <button className="mr-modal-x" onClick={onCancel} data-testid="mr-bookmark-close" title="إغلاق"><X size={16} /></button>
         <h2 style={{ fontSize: 20 }}>إضافة علامة مرجعية</h2>
         <div className="mr-field">
           <label>عنوان العلامة (اختياري)</label>
@@ -2990,7 +3071,8 @@ function InfoEditorModal({ initial, onSave, onCancel }) {
 
   return (
     <div className="mr-shortcuts-panel" onClick={onCancel} data-testid="mr-info-editor">
-      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640, maxHeight: "85vh", overflowY: "auto" }}>
+      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640, maxHeight: "85vh", overflowY: "auto", position: "relative" }}>
+        <button className="mr-modal-x" onClick={onCancel} data-testid="mr-info-close" title="إغلاق"><X size={16} /></button>
         <h2 style={{ fontSize: 20 }}>بطاقة معلومات المخطوط</h2>
 
         <div className="mr-field">
@@ -3086,7 +3168,7 @@ function InfoEditorModal({ initial, onSave, onCancel }) {
 
 function HeadingModal({ initial, onSave, onCancel }) {
   const [title, setTitle] = React.useState(initial?.title || "");
-  const [level, setLevel] = React.useState(initial?.level || 1);
+  const level = 1;
   const inputRef = React.useRef(null);
   React.useEffect(() => { const t = setTimeout(() => inputRef.current?.focus(), 40); return () => clearTimeout(t); }, []);
   React.useEffect(() => {
@@ -3096,20 +3178,16 @@ function HeadingModal({ initial, onSave, onCancel }) {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [title, level, onSave, onCancel]);
+  }, [title, onSave, onCancel]);
   return (
     <div className="mr-shortcuts-panel" onClick={onCancel} data-testid="mr-heading-modal">
       <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+        <button className="mr-modal-x" onClick={onCancel} data-testid="mr-heading-close" title="إغلاق"><X size={16} /></button>
         <h2 style={{ fontSize: 20 }}>{initial?.editingId ? "تعديل العنوان" : "إضافة عنوان"}<span style={{ fontSize: 13, color: "var(--amber)", marginInlineStart: 12 }}>الصفحة {initial?.page}</span></h2>
         <div className="mr-field">
           <label>نص العنوان</label>
           <input ref={inputRef} type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="مثلاً: الباب الأول - في التعريفات" data-testid="mr-heading-input"
             style={{ padding: "8px 10px", borderRadius: 6, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontFamily: "inherit", fontSize: 14, width: "100%" }} />
-        </div>
-        <div className="mr-field">
-          <label>مستوى العنوان (1 = رئيسي، 2 = فرعي…)</label>
-          <input type="number" min="1" max="4" value={level} onChange={(e) => setLevel(Math.max(1, Math.min(4, Number(e.target.value) || 1)))}
-            style={{ padding: "6px 10px", borderRadius: 6, background: "var(--ink-3)", color: "var(--parchment)", border: "1px solid var(--line)", fontFamily: "inherit", fontSize: 14, width: 100 }} />
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
           <button className="mr-btn" onClick={onCancel}>إلغاء</button>
@@ -3138,7 +3216,8 @@ function CommentModal({ initial, onSave, onCancel }) {
 
   return (
     <div className="mr-shortcuts-panel" onClick={onCancel} data-testid="mr-comment-modal">
-      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+      <div className="mr-shortcuts-card mr-fade" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, position: "relative" }}>
+        <button className="mr-modal-x" onClick={onCancel} data-testid="mr-comment-close" title="إغلاق"><X size={16} /></button>
         <h2 style={{ fontSize: 20 }}>
           {initial?.editingId ? "تعديل التعليق" : "إضافة تعليق"}
           <span style={{ fontSize: 13, color: "var(--amber)", marginInlineStart: 12, fontFamily: "inherit" }}>
