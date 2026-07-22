@@ -1687,7 +1687,7 @@ ${sorted.length === 0
 
       <div className="mr-topbar mr-topbar-v2" data-testid="mr-topbar">
         <div className="mr-brand">
-          <div className="mr-brand-mark">م</div>
+          <img src={`${process.env.PUBLIC_URL || ""}/app-icon.png`} alt="M" className="mr-brand-mark" />
           <div className="mr-brand-name">متصفح المخطوطات</div>
         </div>
 
@@ -2143,13 +2143,13 @@ ${sorted.length === 0
 
       <div className="mr-viewer" data-testid="mr-viewer">
         {!hasFile && (
-          <div className="mr-empty mr-fade">
-            <div className="mr-empty-mark">م</div>
-            <h1>متصفح المخطوطات</h1>
-            <p>
-              متصفح مخطوطات مساعد للباحثين على تحميل المخطوطات المضغوطة وتصفحها
-              وتقسيم صفحاتها وترقيمها وتصغير حجمها ومقابلتها والتعليق عليها وفهرستها.
-            </p>
+          <div className="mr-empty mr-fade mr-empty-splash">
+            <img
+              src={`${process.env.PUBLIC_URL || ""}/splash.png`}
+              alt="متصفح المخطوطات"
+              className="mr-splash-img"
+              data-testid="mr-splash-img"
+            />
             <button className="mr-btn mr-btn-primary mr-empty-btn" onClick={openFile} data-testid="mr-empty-open">
               <FolderOpen size={20} />
               افتح ملف مخطوط
@@ -2174,11 +2174,6 @@ ${sorted.length === 0
                 تنزيل نسخة سطح المكتب لويندوز (Portable)
               </a>
             )}
-            <div className="mr-credits" data-testid="mr-credits">
-              فكرة وتصميم: <b>د. محمد عمر أحمد الكاف</b> — اختصاصي مخطوطات
-              <br />
-              <a href="mailto:moakaf2025@gmail.com">moakaf2025@gmail.com</a>
-            </div>
           </div>
         )}
 

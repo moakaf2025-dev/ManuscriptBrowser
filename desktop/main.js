@@ -11,7 +11,7 @@ function createWindow() {
     backgroundColor: "#1a1613",
     autoHideMenuBar: true,
     title: "متصفح المخطوطات",
-    icon: path.join(__dirname, "icon.png"),
+    icon: path.join(__dirname, "icon.ico"),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
