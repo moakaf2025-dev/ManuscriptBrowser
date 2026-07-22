@@ -205,6 +205,101 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   transition: transform 0.12s;
 }
 .mr-bubble:hover { transform: translate(-50%, -50%) scale(1.15); }
+
+/* Highlight rectangles (comments = yellow, headings = blue) */
+.mr-highlight {
+  position: absolute;
+  cursor: pointer;
+  z-index: 6;
+  box-sizing: border-box;
+  border-radius: 3px;
+  transition: box-shadow 0.15s, background 0.15s;
+}
+.mr-highlight-comment {
+  background: rgba(242, 193, 78, 0.22);
+  border: 2px solid rgba(242, 193, 78, 0.85);
+  box-shadow: 0 0 0 1px rgba(242, 193, 78, 0.35);
+}
+.mr-highlight-comment:hover, .mr-highlight-comment.active {
+  background: rgba(242, 193, 78, 0.36);
+  box-shadow: 0 0 0 3px rgba(242, 193, 78, 0.55), 0 8px 22px rgba(0,0,0,0.4);
+}
+.mr-highlight-heading {
+  background: rgba(78, 148, 242, 0.20);
+  border: 2px solid rgba(78, 148, 242, 0.9);
+  box-shadow: 0 0 0 1px rgba(78, 148, 242, 0.35);
+}
+.mr-highlight-heading:hover, .mr-highlight-heading.active {
+  background: rgba(78, 148, 242, 0.34);
+  box-shadow: 0 0 0 3px rgba(78, 148, 242, 0.55), 0 8px 22px rgba(0,0,0,0.4);
+}
+.mr-highlight-icon {
+  position: absolute;
+  top: -10px;
+  inset-inline-start: -10px;
+  width: 22px;
+  height: 22px;
+  background: var(--ink-2);
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid currentColor;
+  color: var(--parchment);
+}
+.mr-highlight-comment .mr-highlight-icon { color: var(--amber); }
+.mr-highlight-heading .mr-highlight-icon { color: #4e94f2; }
+
+/* Live drag-select preview */
+.mr-select-preview {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 3px;
+  z-index: 9;
+  box-sizing: border-box;
+}
+.mr-select-preview-comment {
+  background: rgba(242, 193, 78, 0.28);
+  border: 2px dashed var(--amber);
+}
+.mr-select-preview-heading {
+  background: rgba(78, 148, 242, 0.28);
+  border: 2px dashed #4e94f2;
+}
+
+.mr-bubble-pop-heading {
+  border-color: #4e94f2 !important;
+}
+
+/* Selection mode banner */
+.mr-select-banner {
+  position: fixed;
+  top: 76px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 20px;
+  border-radius: 30px;
+  font-family: 'Amiri', serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  z-index: 80;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+  animation: mrSlideDown 0.3s ease-out;
+}
+.mr-select-banner-comment {
+  background: linear-gradient(135deg, #f2c14e, #d4a250);
+  border: 2px solid #fff8;
+}
+.mr-select-banner-heading {
+  background: linear-gradient(135deg, #4e94f2, #3a7dd6);
+  color: #fff;
+  border: 2px solid #fff8;
+}
+@keyframes mrSlideDown {
+  from { opacity: 0; transform: translate(-50%, -20px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
 .mr-bubble-pop {
   position: absolute;
   top: 34px;

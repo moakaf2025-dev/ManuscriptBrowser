@@ -641,15 +641,27 @@ export default function ManuscriptRuler() {
     };
   }, [clampRuler]);
 
-  // Hand-tool + bubble-comment click state
+  // Hand-tool + drag-select overlay state
   const [handTool, setHandTool] = useState(false);
-  const [bubbleAddMode, setBubbleAddMode] = useState(false);
+  const [selectMode, setSelectMode] = useState(null); // 'comment' | 'heading' | null
+  const [selectingRect, setSelectingRect] = useState(null); // current drag rect (px)
   const [activeBubbleId, setActiveBubbleId] = useState(null);
+  const [activeHeadingId, setActiveHeadingId] = useState(null);
   const panDragRef = useRef(null);
+  const selectDragRef = useRef(null);
 
   const onPageMouseDown = (e) => {
     if (e.target.closest("[data-ruler]")) return;
-    if (e.target.closest("[data-bubble]")) return;
+    if (e.target.closest("[data-bubble]") || e.target.closest("[data-heading-rect]")) return;
+    if (selectMode && pageWrapRef.current) {
+      e.preventDefault();
+      const rect = pageWrapRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      selectDragRef.current = { startX: x, startY: y };
+      setSelectingRect({ x, y, w: 0, h: 0 });
+      return;
+    }
     if (handTool && scrollRef.current) {
       e.preventDefault();
       panDragRef.current = {
@@ -663,36 +675,73 @@ export default function ManuscriptRuler() {
 
   useEffect(() => {
     const onMove = (e) => {
+      if (selectDragRef.current && pageWrapRef.current) {
+        const rect = pageWrapRef.current.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const sx = selectDragRef.current.startX;
+        const sy = selectDragRef.current.startY;
+        setSelectingRect({
+          x: Math.min(sx, x),
+          y: Math.min(sy, y),
+          w: Math.abs(x - sx),
+          h: Math.abs(y - sy),
+        });
+        return;
+      }
       if (!panDragRef.current || !scrollRef.current) return;
       const dx = e.clientX - panDragRef.current.startX;
       const dy = e.clientY - panDragRef.current.startY;
       scrollRef.current.scrollLeft = panDragRef.current.scrollL - dx;
       scrollRef.current.scrollTop = panDragRef.current.scrollT - dy;
     };
-    const onUp = () => { panDragRef.current = null; };
+    const onUp = () => {
+      panDragRef.current = null;
+      if (selectDragRef.current && selectingRect && pageWrapRef.current) {
+        const rect = pageWrapRef.current.getBoundingClientRect();
+        const r = selectingRect;
+        selectDragRef.current = null;
+        // require a minimum size to avoid accidental single-clicks
+        if (r.w > 12 && r.h > 12) {
+          const norm = {
+            x: r.x / rect.width,
+            y: r.y / rect.height,
+            w: r.w / rect.width,
+            h: r.h / rect.height,
+          };
+          if (selectMode === "comment") {
+            setCommentModal({ editingId: null, page: state.page, text: "", bubble: true, rect: norm });
+          } else if (selectMode === "heading") {
+            setHeadingModal({ editingId: null, page: state.page, title: "", level: 1, rect: norm });
+          }
+        }
+        setSelectingRect(null);
+        setSelectMode(null);
+      } else if (selectDragRef.current) {
+        selectDragRef.current = null;
+        setSelectingRect(null);
+      }
+    };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, []);
+  }, [selectMode, selectingRect, state.page]);
 
   const onPageClick = (e) => {
     if (!pageWrapRef.current) return;
-    setOpenGroup(null); // auto-close any open popover on manuscript click
-    if (e.target.closest("[data-ruler]")) return;
-    if (e.target.closest("[data-bubble]")) return; // bubble handles its own click
-    const rect = pageWrapRef.current.getBoundingClientRect();
-    if (bubbleAddMode) {
-      // Place a new comment bubble at (rx, ry) as ratios of the page
-      const rx = (e.clientX - rect.left) / rect.width;
-      const ry = (e.clientY - rect.top) / rect.height;
-      setBubbleAddMode(false);
-      setCommentModal({ editingId: null, page: state.page, text: "", bubble: true, x: rx, y: ry });
+    // if we just finished a drag selection, don't move the ruler
+    if (selectingRect || selectMode) {
+      setOpenGroup(null);
       return;
     }
-    if (handTool) return; // hand tool: click just closes popover, no ruler move
+    setOpenGroup(null);
+    if (e.target.closest("[data-ruler]")) return;
+    if (e.target.closest("[data-bubble]") || e.target.closest("[data-heading-rect]")) return;
+    if (handTool) return;
+    const rect = pageWrapRef.current.getBoundingClientRect();
     const y = e.clientY - rect.top - state.rulerHeight / 2;
     setState((s) => ({ ...s, rulerY: clampRuler(y) }));
   };
@@ -937,7 +986,9 @@ export default function ManuscriptRuler() {
 
   const openAddHeading = () => {
     if (!state.fileKey) return;
-    setHeadingModal({ editingId: null, page: state.page, title: "", level: 1 });
+    setSelectMode("heading");
+    setOpenGroup(null);
+    showToast("اسحب مربعاً أزرق حول عنوان لتحديده");
   };
   const openEditHeading = (h) => {
     setHeadingModal({ editingId: h.id, page: h.page, title: h.title, level: h.level });
@@ -951,7 +1002,7 @@ export default function ManuscriptRuler() {
       if (headingModal.editingId) {
         return { ...m, [state.fileKey]: list.map((h) => h.id === headingModal.editingId ? { ...h, title: t, level } : h) };
       }
-      const newH = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, page: headingModal.page, title: t, level };
+      const newH = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, page: headingModal.page, title: t, level, rect: headingModal.rect };
       return { ...m, [state.fileKey]: [...list, newH] };
     });
     setHeadingModal(null);
@@ -1105,10 +1156,9 @@ export default function ManuscriptRuler() {
 
   const openAddComment = () => {
     if (!state.fileKey) return;
-    // Enter bubble-add mode: user clicks anywhere on the manuscript to place the comment
-    setBubbleAddMode(true);
+    setSelectMode("comment");
     setOpenGroup(null);
-    showToast("انقر على أي موضع في المخطوط لوضع تعليق");
+    showToast("اسحب مربعاً أصفر حول الكلمة أو الفقرة لوضع تعليق");
   };
 
   const openEditComment = (c) => {
@@ -1150,7 +1200,8 @@ export default function ManuscriptRuler() {
         folio,
         line: commentModal.line,
         y: commentModal.y,
-        x: commentModal.x, // ratio 0..1 for bubble comments (undefined = old line-based)
+        x: commentModal.x, // legacy: single-point bubble
+        rect: commentModal.rect, // new: highlight rectangle {x, y, w, h} as ratios
         text: t,
         createdAt: new Date().toISOString(),
       };
@@ -1387,6 +1438,13 @@ ${sorted.length === 0
           setState((s) => ({ ...s, rulerAutoPlaying: !s.rulerAutoPlaying }));
         }
         return;
+      }
+      if (e.key === "Escape") {
+        // Cancel any active selection mode
+        setSelectMode((m) => m ? null : m);
+        setSelectingRect(null);
+        setActiveBubbleId(null);
+        setActiveHeadingId(null);
       }
       if (e.ctrlKey && e.key.toLowerCase() === "b") {
         e.preventDefault();
@@ -2028,7 +2086,7 @@ ${sorted.length === 0
               style={{
                 width: pageSize.w || undefined,
                 height: pageSize.h || undefined,
-                cursor: bubbleAddMode ? "crosshair" : (handTool ? (panDragRef.current ? "grabbing" : "grab") : undefined),
+                cursor: selectMode ? "crosshair" : (handTool ? (panDragRef.current ? "grabbing" : "grab") : undefined),
               }}
               data-testid="mr-page-wrap"
             >
@@ -2097,37 +2155,102 @@ ${sorted.length === 0
                 );
               })()}
 
-              {/* Bubble comments layer */}
-              {currentComments.filter((c) => c.page === state.page && c.x != null).map((c) => (
-                <div
-                  key={c.id}
-                  data-bubble
-                  className="mr-bubble"
-                  style={{
-                    left: `${c.x * 100}%`,
-                    top: `${c.y * 100}%`,
-                  }}
-                  title={c.text}
-                  data-testid="mr-bubble"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveBubbleId(activeBubbleId === c.id ? null : c.id);
-                  }}
-                >
-                  <MessageSquarePlus size={16} />
-                  {activeBubbleId === c.id && (
-                    <div className="mr-bubble-pop" onClick={(e) => e.stopPropagation()}>
-                      <div className="mr-bubble-text">{c.text}</div>
-                      <div className="mr-bubble-meta">{c.folio || `صفحة ${c.page}`}</div>
-                      <div className="mr-bubble-actions">
-                        <button className="mr-btn" onClick={() => copyCommentCitation(c)} data-testid="mr-bubble-copy"><Copy size={11} /> نسخ مع العزو</button>
-                        <button className="mr-btn" onClick={() => { setActiveBubbleId(null); openEditComment(c); }} data-testid="mr-bubble-edit"><Edit3 size={11} /> تعديل</button>
-                        <button className="mr-btn" onClick={() => { deleteComment(c.id); setActiveBubbleId(null); }} data-testid="mr-bubble-delete" style={{ color: "var(--danger)" }}><Trash2 size={11} /> حذف</button>
+              {/* Bubble comments layer (rect highlights) */}
+              {currentComments.filter((c) => c.page === state.page && (c.rect || c.x != null)).map((c) => {
+                const r = c.rect;
+                const style = r
+                  ? {
+                      left: `${r.x * 100}%`,
+                      top: `${r.y * 100}%`,
+                      width: `${r.w * 100}%`,
+                      height: `${r.h * 100}%`,
+                    }
+                  : {
+                      left: `${c.x * 100}%`,
+                      top: `${c.y * 100}%`,
+                      width: "24px",
+                      height: "24px",
+                      transform: "translate(-50%, -50%)",
+                    };
+                return (
+                  <div
+                    key={c.id}
+                    data-bubble
+                    className={`mr-highlight mr-highlight-comment ${activeBubbleId === c.id ? "active" : ""}`}
+                    style={style}
+                    title={c.text}
+                    data-testid="mr-bubble"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveBubbleId(activeBubbleId === c.id ? null : c.id);
+                      setActiveHeadingId(null);
+                    }}
+                  >
+                    <span className="mr-highlight-icon" aria-hidden><MessageSquarePlus size={13} /></span>
+                    {activeBubbleId === c.id && (
+                      <div className="mr-bubble-pop" onClick={(e) => e.stopPropagation()}>
+                        <div className="mr-bubble-text">{c.text}</div>
+                        <div className="mr-bubble-meta">{c.folio || `صفحة ${c.page}`}</div>
+                        <div className="mr-bubble-actions">
+                          <button className="mr-btn" onClick={() => copyCommentCitation(c)} data-testid="mr-bubble-copy"><Copy size={11} /> نسخ مع العزو</button>
+                          <button className="mr-btn" onClick={() => { setActiveBubbleId(null); openEditComment(c); }} data-testid="mr-bubble-edit"><Edit3 size={11} /> تعديل</button>
+                          <button className="mr-btn" onClick={() => { deleteComment(c.id); setActiveBubbleId(null); }} data-testid="mr-bubble-delete" style={{ color: "var(--danger)" }}><Trash2 size={11} /> حذف</button>
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              ))}
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Heading rectangles layer */}
+              {currentHeadings.filter((h) => h.page === state.page && h.rect).map((h) => {
+                const r = h.rect;
+                return (
+                  <div
+                    key={h.id}
+                    data-heading-rect
+                    className={`mr-highlight mr-highlight-heading ${activeHeadingId === h.id ? "active" : ""}`}
+                    style={{
+                      left: `${r.x * 100}%`,
+                      top: `${r.y * 100}%`,
+                      width: `${r.w * 100}%`,
+                      height: `${r.h * 100}%`,
+                    }}
+                    title={h.title}
+                    data-testid="mr-heading-rect"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveHeadingId(activeHeadingId === h.id ? null : h.id);
+                      setActiveBubbleId(null);
+                    }}
+                  >
+                    <span className="mr-highlight-icon" aria-hidden><List size={13} /></span>
+                    {activeHeadingId === h.id && (
+                      <div className="mr-bubble-pop mr-bubble-pop-heading" onClick={(e) => e.stopPropagation()}>
+                        <div className="mr-bubble-text" style={{ fontWeight: 700 }}>{h.title}</div>
+                        <div className="mr-bubble-meta">{formatFolio(h.page, { startFolio: state.folioStart, offset: state.folioOffset })}</div>
+                        <div className="mr-bubble-actions">
+                          <button className="mr-btn" onClick={() => { setActiveHeadingId(null); openEditHeading(h); }}><Edit3 size={11} /> تعديل</button>
+                          <button className="mr-btn" onClick={() => { deleteHeading(h.id); setActiveHeadingId(null); }} style={{ color: "var(--danger)" }}><Trash2 size={11} /> حذف</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Live drag-select rectangle preview */}
+              {selectingRect && (
+                <div
+                  className={`mr-select-preview mr-select-preview-${selectMode}`}
+                  style={{
+                    left: selectingRect.x,
+                    top: selectingRect.y,
+                    width: selectingRect.w,
+                    height: selectingRect.h,
+                  }}
+                />
+              )}
             </div>
           </div>
         )}
@@ -2904,6 +3027,13 @@ ${sorted.length === 0
 
         {loading && <div className="mr-loading" data-testid="mr-loading">{loadingMsg}</div>}
         {toast && <div className="mr-toast" data-testid="mr-toast">{toast}</div>}
+        {selectMode && (
+          <div className={`mr-select-banner mr-select-banner-${selectMode}`} data-testid="mr-select-banner">
+            {selectMode === "comment"
+              ? "🟡 اسحب مربعاً حول الكلمة أو الفقرة التي تريد التعليق عليها — Esc للإلغاء"
+              : "🔵 اسحب مربعاً حول العنوان الذي تريد تحديده — Esc للإلغاء"}
+          </div>
+        )}
         {state.rulerAutoPlaying && (
           <button
             className="mr-floating-pause"
