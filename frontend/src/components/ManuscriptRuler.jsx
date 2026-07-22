@@ -2150,10 +2150,6 @@ ${sorted.length === 0
               className="mr-splash-img"
               data-testid="mr-splash-img"
             />
-            <button className="mr-btn mr-btn-primary mr-empty-btn" onClick={openFile} data-testid="mr-empty-open">
-              <FolderOpen size={20} />
-              افتح ملف مخطوط
-            </button>
             {!window.msElectron && !NS && (
               <a
                 href={`${process.env.REACT_APP_BACKEND_URL || ""}/api/download/windows`}
@@ -2166,7 +2162,6 @@ ${sorted.length === 0
                   color: "var(--amber)",
                   border: "1px solid var(--amber)",
                   textDecoration: "none",
-                  marginTop: 4,
                 }}
                 download
               >

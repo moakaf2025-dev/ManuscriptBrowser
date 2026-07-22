@@ -1,7 +1,7 @@
 {
   "name": "manuscript-browser",
   "productName": "ManuscriptBrowser",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "متصفح المخطوطات - أداة سطح مكتب لمعاونة الباحث في المخطوطات",
   "main": "main.js",
   "author": "د. محمد عمر أحمد الكاف - moakaf2025@gmail.com",
