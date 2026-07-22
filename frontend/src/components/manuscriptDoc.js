@@ -342,7 +342,10 @@ export function formatFolio(pageIndex, { startFolio = 1, offset = 0, style = "fo
   }
   const folio = Math.ceil(manuscriptIdx / 2) + (startFolio - 1);
   const side = manuscriptIdx % 2 === 1 ? (latin ? "a" : "أ") : (latin ? "b" : "ب");
-  return `${folio}/${side}`;
+  // Wrap with LRI/PDI so RTL contexts (UI and Word) show "1/أ" (number-slash-letter,
+  // reading left-to-right), matching manuscript-studies convention. Without the isolate,
+  // BiDi renders it as "أ/1".
+  return `\u2066${folio}/${side}\u2069`;
 }
 
 // ------------------- Image compression export -------------------

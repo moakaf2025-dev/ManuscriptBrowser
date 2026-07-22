@@ -635,7 +635,7 @@ export default function ManuscriptRuler() {
         if (nextY >= maxY) {
           // reach bottom → advance page or stop
           if (s.page < pageCount) {
-            return { ...s, page: s.page + 1, rulerY: 0 };
+            return { ...s, page: s.page + 1, rulerY: Math.max(0, s.rulerStep * 3) };
           }
           return { ...s, rulerAutoPlaying: false };
         }
@@ -656,10 +656,13 @@ export default function ManuscriptRuler() {
   // ---------------- Ruler interactions ----------------
   const clampRuler = useCallback(
     (y) => {
-      const max = Math.max(0, pageSize.h - state.rulerHeight);
-      return Math.min(Math.max(0, y), max);
+      // Keep at least ~3 lines from top so the ruler doesn't hide behind
+      // the black/blank margin above the first line of text.
+      const minY = Math.max(0, state.rulerStep * 3);
+      const max = Math.max(minY, pageSize.h - state.rulerHeight);
+      return Math.min(Math.max(minY, y), max);
     },
-    [pageSize.h, state.rulerHeight]
+    [pageSize.h, state.rulerHeight, state.rulerStep]
   );
 
   const moveRulerBy = (delta) => {
@@ -1107,6 +1110,53 @@ export default function ManuscriptRuler() {
   }, [showThumbs, doc, pageCount]);
 
   // ---------------- Export as indexed PDF with bookmarks ----------------
+  const exportCroppedPdf = async () => {
+    if (!doc) return;
+    setLoading(true);
+    setLoadingMsg("تصدير المخطوط المقصوص… قد يستغرق وقتاً");
+    try {
+      const { PDFDocument } = await import("pdf-lib");
+      const pdfDoc = await PDFDocument.create();
+      const quality = 0.95;
+      const maxSize = 4000;
+      for (let i = 1; i <= pageCount; i++) {
+        setLoadingMsg(`صفحة ${i} / ${pageCount}…`);
+        const page = await doc.getPage(i);
+        const vp = page.getViewport({ scale: 1, rotation: 0 });
+        const targetScale = Math.min(2, maxSize / Math.max(vp.width, vp.height));
+        const rvp = page.getViewport({ scale: targetScale, rotation: 0 });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.floor(rvp.width);
+        canvas.height = Math.floor(rvp.height);
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport: rvp }).promise;
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        const bytes = Uint8Array.from(atob(dataUrl.split(",")[1]), (c) => c.charCodeAt(0));
+        const img = await pdfDoc.embedJpg(bytes);
+        const pg = pdfDoc.addPage([img.width, img.height]);
+        pg.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+      }
+      const pdfBytes = await pdfDoc.save();
+      const blob = new Blob([pdfBytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const base = (state.fileName || "manuscript").replace(/\.[^.]+$/, "").replace(/[/\\?%*:|"<>]/g, "-");
+      a.download = `${base} - مقصوص.pdf`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 8000);
+      showToast(`تم تصدير المخطوط المقصوص (${pageCount} صفحة)`);
+    } catch (e) {
+      console.error(e);
+      showToast("تعذّر تصدير PDF");
+    } finally {
+      setLoading(false);
+      setLoadingMsg("");
+    }
+  };
+
   const exportAsIndexedPdf = async () => {
     if (!doc) return;
     setLoading(true);
@@ -2009,7 +2059,7 @@ ${sorted.length === 0
             <div className="mr-popover" data-testid="mr-pop-export">
               <button className="mr-pop-x" onClick={() => setOpenGroup(null)} title="إغلاق"><X size={14} /></button>
               <button className="mr-pop-item" onClick={() => { setState((s) => ({ ...s, exportFormat: "zip" })); setShowExport(true); setOpenGroup(null); }} data-testid="mr-exp-zip">
-                <Archive size={13} /> صور مقصوصة (ZIP) — للذكاء الاصطناعي
+                <Archive size={13} /> صور مضغوطة في ملف ZIP
               </button>
               <button className="mr-pop-item" onClick={() => { exportAsIndexedPdf(); setOpenGroup(null); }} data-testid="mr-exp-pdf-indexed">
                 <FileText size={13} /> PDF مفهرس بالعناوين والتعليقات
@@ -2057,7 +2107,7 @@ ${sorted.length === 0
                   onChange={(e) => {
                     const v = Number(e.target.value);
                     if (v >= 1 && v <= pageCount) {
-                      setState((s) => ({ ...s, page: v, rulerY: 0 }));
+                      setState((s) => ({ ...s, page: v, rulerY: Math.max(0, s.rulerStep * 3) }));
                     }
                   }}
                   className="mr-page-input"
@@ -2596,7 +2646,7 @@ ${sorted.length === 0
               <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.7 }}>
                 <b style={{ color: "var(--amber)" }}>الخطوة 3: تفعيل ترقيم الأوراق (أ/ب)</b>
                 <br />
-                فعّل الترقيم، وحدّد رقم الفوليو الأول وعدد صفحات الغلاف قبل بداية المخطوط.
+                فعّل الترقيم، وحدّد رقم الورقة الأولى من المخطوط وعدد صفحات الغلاف قبل بداية المخطوط.
               </div>
             )}
 
@@ -2686,14 +2736,14 @@ ${sorted.length === 0
               <>
                 <div className="mr-field">
                   <label style={{ cursor: "pointer", flexDirection: "row", justifyContent: "space-between" }}>
-                    <span>تفعيل ترقيم الفوليو (أ/ب)</span>
+                    <span>تفعيل ترقيم المخطوط (أ/ب)</span>
                     <input type="checkbox" checked={state.folioMode}
                       onChange={(e) => setState((s) => ({ ...s, folioMode: e.target.checked }))}
                       data-testid="mr-folio-toggle" style={{ accentColor: "var(--amber)" }} />
                   </label>
                 </div>
                 <div className="mr-field">
-                  <label>رقم الفوليو الأول <span className="val">{state.folioStart}</span></label>
+                  <label>رقم الورقة الأولى من المخطوط <span className="val">{state.folioStart}</span></label>
                   <input type="number" min="1" value={state.folioStart}
                     onChange={(e) => setState((s) => ({ ...s, folioStart: Math.max(1, Number(e.target.value) || 1) }))}
                     data-testid="mr-folio-start" />
@@ -2713,21 +2763,31 @@ ${sorted.length === 0
               </>
             )}
 
-            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              {numberStep > 1 && (
-                <button className="mr-btn" onClick={() => setNumberStep(numberStep - 1)} style={{ flex: 1, justifyContent: "center" }} data-testid="mr-num-prev">
-                  ← السابق
-                </button>
-              )}
-              {numberStep < 3 && (
-                <button className="mr-btn mr-btn-primary" onClick={() => setNumberStep(numberStep + 1)} style={{ flex: 1, justifyContent: "center" }} data-testid="mr-num-next">
-                  التالي ←
-                </button>
-              )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+              <div style={{ display: "flex", gap: 6 }}>
+                {numberStep > 1 && (
+                  <button className="mr-btn" onClick={() => setNumberStep(numberStep - 1)} style={{ flex: 1, justifyContent: "center" }} data-testid="mr-num-prev">
+                    ← السابق
+                  </button>
+                )}
+                {numberStep < 3 && (
+                  <button className="mr-btn mr-btn-primary" onClick={() => setNumberStep(numberStep + 1)} style={{ flex: 1, justifyContent: "center" }} data-testid="mr-num-next">
+                    التالي ←
+                  </button>
+                )}
+              </div>
               {numberStep === 3 && (
-                <button className="mr-btn mr-btn-primary" onClick={exportAsIndexedPdf} style={{ flex: 1, justifyContent: "center" }} data-testid="mr-num-save-pdf">
-                  <Download size={13} /> حفظ وتصدير PDF
-                </button>
+                <>
+                  <button className="mr-btn" onClick={() => { showToast("تم حفظ إعدادات الترقيم"); setShowFolioSettings(false); }} style={{ justifyContent: "center" }} data-testid="mr-num-save">
+                    <Save size={13} /> حفظ الإعدادات
+                  </button>
+                  <button className="mr-btn mr-btn-primary" onClick={() => exportCroppedPdf()} style={{ justifyContent: "center" }} data-testid="mr-num-export-pdf">
+                    <Download size={13} /> تصدير المخطوط المقصوص PDF
+                  </button>
+                  <div style={{ fontSize: 11, color: "var(--muted)", padding: "6px 8px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.6 }}>
+                    ملاحظة: حجم الملف سيكون كبيراً (بالجودة الأصلية)، ويمكنك تصغيره لاحقاً من خيار «PDF مضغوط» في قسم التصدير.
+                  </div>
+                </>
               )}
             </div>
           </div>
@@ -2736,7 +2796,10 @@ ${sorted.length === 0
 
         {showExport && (
           <div className="mr-settings mr-fade" data-testid="mr-export-panel" style={{ inset: "auto 10px 10px auto", top: 60, width: 320 }}>
-            <h3>تصدير المخطوط</h3>
+            <h3 style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              تصدير المخطوط
+              <button className="mr-btn mr-btn-icon" onClick={() => setShowExport(false)} title="إغلاق" data-testid="mr-export-close"><X size={14} /></button>
+            </h3>
 
             <div className="mr-field">
               <label>صيغة التصدير</label>
@@ -3047,6 +3110,9 @@ ${sorted.length === 0
                 ))}
               </div>
             )}
+            <button className="mr-btn" onClick={exportHeadingsAsWord} style={{ justifyContent: "center", marginTop: 6 }} data-testid="mr-export-headings-word">
+              <FileText size={14} /> تصدير الفهرس إلى Word
+            </button>
             <button className="mr-btn" onClick={exportAsIndexedPdf} style={{ justifyContent: "center", marginTop: 6 }} data-testid="mr-export-indexed-pdf">
               <FileText size={14} /> تصدير PDF مفهرس (مع bookmarks)
             </button>
