@@ -161,6 +161,7 @@ function saveKV(key, data) {
 
 const RECENTS_KEY = "manuscriptRulerRecents.v1" + _NS_SUFFIX;
 const AUTO_BM_KEY = "manuscriptRulerAutoBM.v1" + _NS_SUFFIX;
+const PER_FILE_SETTINGS_KEY = "manuscriptRulerPerFileSettings.v1" + _NS_SUFFIX;
 
 const EMPTY_INFO = {
   type: "single",     // "single" | "collection"
@@ -398,12 +399,14 @@ export default function ManuscriptRuler() {
         };
       });
 
-      // Update recents (last 5 fileKeys → names)
+      // Update recents (last 5 fileKeys → names + path if available)
       try {
         const raw = localStorage.getItem(RECENTS_KEY);
         const recents = raw ? JSON.parse(raw) : [];
         const filtered = recents.filter((r) => r.fileKey !== fileKey);
-        const next = [{ fileKey, name: file.name, at: Date.now() }, ...filtered].slice(0, 5);
+        // Electron: file.path is absolute; Browser: not available (security)
+        const filePath = file.path || file.webkitRelativePath || "";
+        const next = [{ fileKey, name: file.name, path: filePath, at: Date.now() }, ...filtered].slice(0, 5);
         localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
       } catch { /* noop */ }
 
@@ -421,6 +424,16 @@ export default function ManuscriptRuler() {
         }
       } catch { /* noop */ }
 
+      // Restore per-file image/browse settings if exists
+      let restoredSettings = null;
+      try {
+        const raw = localStorage.getItem(PER_FILE_SETTINGS_KEY);
+        if (raw) {
+          const map = JSON.parse(raw);
+          restoredSettings = map[fileKey] || null;
+        }
+      } catch { /* noop */ }
+
       // Add/update tab
       setTabs((prev) => {
         const idx = prev.findIndex((t) => t.fileKey === fileKey);
@@ -433,7 +446,7 @@ export default function ManuscriptRuler() {
         return [...prev, tabObj];
       });
 
-      setState((s) => ({ ...s, fileName: file.name, fileKey, fileType: ft, page: restoredPage, rulerY: restoredY, splitPages: false, splitFrom: 1, splitTo: baseD.numPages }));
+      setState((s) => ({ ...s, ...(restoredSettings || {}), fileName: file.name, fileKey, fileType: ft, page: restoredPage, rulerY: restoredY, splitPages: false, splitFrom: 1, splitTo: baseD.numPages }));
     } catch (e) {
       console.error(e);
       showToast(e.message || "تعذّر فتح الملف");
@@ -538,6 +551,35 @@ export default function ManuscriptRuler() {
       window.removeEventListener("mouseup", onUp);
     };
   }, [thumbsWidth]);
+
+  // Save current image/browse/ruler settings per file so they restore next time
+  useEffect(() => {
+    if (!state.fileKey) return;
+    const perFileKeys = [
+      "brightness", "contrast", "saturate", "sharpen", "denoise",
+      "invert", "invertR", "invertG", "invertB",
+      "zoomIdx", "rotation",
+      "rulerHeight", "rulerWidth", "rulerAlign", "rulerColor", "rulerOpacity", "rulerShape", "rulerTilt", "dimAlpha", "dimEnabled",
+      "folioMode", "folioStart", "folioOffset",
+    ];
+    try {
+      const raw = localStorage.getItem(PER_FILE_SETTINGS_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      const patch = {};
+      for (const k of perFileKeys) patch[k] = state[k];
+      map[state.fileKey] = patch;
+      localStorage.setItem(PER_FILE_SETTINGS_KEY, JSON.stringify(map));
+    } catch { /* noop */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    state.fileKey, state.brightness, state.contrast, state.saturate, state.sharpen, state.denoise,
+    state.invert, state.invertR, state.invertG, state.invertB,
+    state.zoomIdx, state.rotation,
+    state.rulerHeight, state.rulerWidth, state.rulerAlign, state.rulerColor, state.rulerOpacity,
+    state.rulerShape, state.rulerTilt, state.dimAlpha, state.dimEnabled,
+    state.folioMode, state.folioStart, state.folioOffset,
+  ]);
+
   useEffect(() => {
     const persist = () => {
       if (!state.fileKey) return;
@@ -558,6 +600,16 @@ export default function ManuscriptRuler() {
       window.removeEventListener("pagehide", persist);
     };
   }, [state.fileKey, state.page, state.rulerY]);
+
+  // Auto-activate hand tool when zoomed to ≥100%
+  useEffect(() => {
+    if (scale >= 1 && !handTool) {
+      setHandTool(true);
+    } else if (scale < 1 && handTool) {
+      setHandTool(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scale]);
 
   // Auto-hide grouped popovers when ruler auto-scroll is playing
   useEffect(() => {
@@ -1651,13 +1703,25 @@ ${sorted.length === 0
               <div className="mr-pop-title">آخر المخطوطات ({recentFiles.length}):</div>
               {recentFiles.length === 0 && <div className="mr-pop-empty">لا توجد ملفات سابقة</div>}
               {recentFiles.slice(0, 5).map((r) => (
-                <div key={r.fileKey} className="mr-pop-item" data-testid="mr-pop-recent">
+                <div key={r.fileKey} className="mr-pop-item mr-pop-item-recent" data-testid="mr-pop-recent">
                   <FileText size={13} />
-                  <span title={r.name}>{r.name.length > 34 ? r.name.slice(0, 32) + "…" : r.name}</span>
+                  <div style={{ display: "flex", flexDirection: "column", overflow: "hidden", flex: 1 }}>
+                    <span title={r.name} style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</span>
+                    {r.path && (
+                      <span
+                        title={r.path}
+                        style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", direction: "ltr", textAlign: "start" }}
+                      >
+                        📁 {r.path}
+                      </span>
+                    )}
+                  </div>
                 </div>
               ))}
               <div className="mr-pop-hint">
-                أسماء الملفات السابقة تظهر هنا للتذكير. لأسباب أمنية، لا يستطيع المتصفح فتح الملفات تلقائياً — اضغط «فتح مخطوط» أعلاه لاختيار ملف.
+                {window.msElectron
+                  ? "أسماء الملفات مع مساراتها الكاملة تظهر هنا لتذكيرك بموقعها."
+                  : "أسماء الملفات السابقة تظهر هنا للتذكير. لأسباب أمنية في المتصفح، لا يستطيع البرنامج معرفة المسار الكامل — استعمل نسخة سطح المكتب لعرض المسار."}
               </div>
             </div>
           )}
@@ -1766,12 +1830,6 @@ ${sorted.length === 0
                 <button className={`mr-btn ${state.invertR ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertR: !s.invertR }))} data-testid="mr-set-invert-r" style={{color: state.invertR ? "#ff6b6b" : undefined}}>R</button>
                 <button className={`mr-btn ${state.invertG ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertG: !s.invertG }))} data-testid="mr-set-invert-g" style={{color: state.invertG ? "#5cff8f" : undefined}}>G</button>
                 <button className={`mr-btn ${state.invertB ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertB: !s.invertB }))} data-testid="mr-set-invert-b" style={{color: state.invertB ? "#6ba8ff" : undefined}}>B</button>
-              </div>
-              <div className="mr-pop-title">شريط مصغّرات الصفحات:</div>
-              <div className="mr-pop-row">
-                <button className={`mr-btn ${showThumbs ? "mr-btn-active" : ""}`} onClick={() => setShowThumbs((v) => !v)} data-testid="mr-btn-thumbs">
-                  <LayoutGrid size={13} /> {showThumbs ? "إخفاء المصغّرات" : "إظهار المصغّرات"}
-                </button>
               </div>
             </div>
           )}
@@ -1990,7 +2048,23 @@ ${sorted.length === 0
               <button className="mr-btn mr-btn-icon" onClick={prevPage} disabled={state.page <= 1} title="الصفحة السابقة" data-testid="mr-btn-prev"><ChevronRight size={18} /></button>
               <span className="mr-info-chip" data-testid="mr-page-label">
                 {state.folioMode ? formatFolio(state.page, { startFolio: state.folioStart, offset: state.folioOffset }) : `صفحة ${state.page}`}
-                {" · "}{state.page}/{pageCount}
+                {" · "}
+                <input
+                  type="number"
+                  min="1"
+                  max={pageCount}
+                  value={state.page}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (v >= 1 && v <= pageCount) {
+                      setState((s) => ({ ...s, page: v, rulerY: 0 }));
+                    }
+                  }}
+                  className="mr-page-input"
+                  data-testid="mr-page-input"
+                  title="اكتب رقم الصفحة للانتقال إليها مباشرة"
+                />
+                /{pageCount}
               </span>
               <button className="mr-btn mr-btn-icon" onClick={nextPage} disabled={state.page >= pageCount} title="الصفحة التالية" data-testid="mr-btn-next"><ChevronLeft size={18} /></button>
               <button className="mr-btn mr-btn-icon" onClick={lastPage} disabled={state.page >= pageCount} title="آخر المخطوط" data-testid="mr-btn-last"><ChevronsLeft size={18} /></button>
@@ -2048,7 +2122,7 @@ ${sorted.length === 0
               <FolderOpen size={20} />
               افتح ملف مخطوط
             </button>
-            {!window.msElectron && (
+            {!window.msElectron && !NS && (
               <a
                 href={`${process.env.REACT_APP_BACKEND_URL || ""}/api/download/windows`}
                 className="mr-btn"
@@ -2508,14 +2582,14 @@ ${sorted.length === 0
               <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.7 }}>
                 <b style={{ color: "var(--amber)" }}>الخطوة 1: تفعيل تقسيم الصفحات المزدوجة</b>
                 <br />
-                فعّل التقسيم من المنتصف، وحدّد أول صفحة يبدأ منها التقسيم وآخر صفحة ينتهي عندها. الصفحات خارج هذا المدى تبقى كاملة (مفيد لصفحات الغلاف والكولوفون).
+                فعّل التقسيم من المنتصف، وحدّد أول صفحة يبدأ منها التقسيم وآخر صفحة ينتهي عندها. الصفحات خارج هذا المدى تبقى كاملة (مفيد لصفحات الغلاف ونهاية المخطوط).
               </div>
             )}
             {numberStep === 2 && (
               <div style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.7 }}>
                 <b style={{ color: "var(--amber)" }}>الخطوة 2: مراجعة التقسيم</b>
                 <br />
-                تنقّل بين الأوراق. إذا فشل الكشف الذكي في قصّ ورقة معيّنة من المنتصف، اضبطها يدوياً باستخدام «موضع القص للورقة» أدناه.
+                تنقَّل بين الأوراق. إذا فشل الكشف الذكي في قصّ ورقة معيّنة من المنتصف، انتقل للورقة التي بعدها، واضبطها يدوياً باستخدام «موضع القص للورقة» أدناه، بسحب الشريط لليمين أو لليسار حتى تصل للحد المطلوب.
               </div>
             )}
             {numberStep === 3 && (

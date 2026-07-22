@@ -135,7 +135,27 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   border: 1px solid var(--line);
   font-variant-numeric: tabular-nums;
   font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
+.mr-page-input {
+  width: 50px;
+  padding: 2px 4px;
+  background: var(--ink);
+  border: 1px solid var(--line);
+  color: var(--amber);
+  text-align: center;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  outline: none;
+  -moz-appearance: textfield;
+}
+.mr-page-input::-webkit-outer-spin-button,
+.mr-page-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.mr-page-input:focus { border-color: var(--amber); background: var(--ink-2); }
 
 /* Viewer area */
 .mr-viewer {

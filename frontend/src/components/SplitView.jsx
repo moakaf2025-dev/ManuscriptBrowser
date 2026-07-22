@@ -61,8 +61,7 @@ export default function SplitView() {
 
   if (isChild) return <ManuscriptRuler />;
 
-  // Compute iframe URLs. Use base + `?ns=A|B|C` so each pane gets its own localStorage.
-  const paneKeys = ["A", "B"].slice(0, panes);
+  // Compute iframe URLs. Use base + `#ns=A|B` so each pane gets its own localStorage.
   const baseHref = (() => {
     try {
       const u = new URL(window.location.href);
@@ -98,31 +97,35 @@ export default function SplitView() {
       </div>
 
       <div className="sv-body" ref={containerRef} data-testid="sv-body">
-        {panes === 1 && (
-          <div className="sv-pane" style={{ flex: "1 1 100%" }}>
-            <ManuscriptRuler />
-          </div>
-        )}
-        {panes > 1 && paneKeys.map((k, i) => (
-          <React.Fragment key={k}>
-            <div className="sv-pane" style={{ flex: `0 0 ${sizes[i]}%` }} data-testid={`sv-pane-${k}`}>
+        {/* Pane A: always mounted so its state persists across mode switches */}
+        <div className="sv-pane" style={{ flex: `0 0 ${panes === 1 ? 100 : sizes[0]}%` }} data-testid="sv-pane-A">
+          <iframe
+            key="pane-A"
+            title="مخطوط A"
+            src={`${baseHref}#ns=A`}
+            className="sv-frame"
+            allow="clipboard-write; clipboard-read; fullscreen *"
+          />
+        </div>
+        {panes === 2 && (
+          <>
+            <div
+              className="sv-divider"
+              onMouseDown={beginDrag(0)}
+              data-testid="sv-divider-0"
+              title="اسحب للتحكم في حجم المخطوطات"
+            />
+            <div className="sv-pane" style={{ flex: `0 0 ${sizes[1]}%` }} data-testid="sv-pane-B">
               <iframe
-                title={`مخطوط ${k}`}
-                src={`${baseHref}#ns=${k}`}
+                key="pane-B"
+                title="مخطوط B"
+                src={`${baseHref}#ns=B`}
                 className="sv-frame"
-                allow="clipboard-write; clipboard-read; display-capture *; fullscreen *"
+                allow="clipboard-write; clipboard-read; fullscreen *"
               />
             </div>
-            {i < panes - 1 && (
-              <div
-                className="sv-divider"
-                onMouseDown={beginDrag(i)}
-                data-testid={`sv-divider-${i}`}
-                title="اسحب للتحكم في حجم المخطوطات"
-              />
-            )}
-          </React.Fragment>
-        ))}
+          </>
+        )}
       </div>
     </div>
   );
