@@ -331,21 +331,29 @@ export function toggleSplitDoc(baseDoc, split, splitRange, overridesRef) {
 }
 
 // ------------------- Folio numbering -------------------
+// Convert Western digits to Arabic-Indic so BiDi keeps them RTL-strong.
+// This makes "1/أ" render as "١/أ" in RTL contexts with number-slash-letter reading order
+// (which is what manuscript-studies convention requires).
+const _ARABIC_DIGITS = ["٠", "١", "٢", "٣", "٤", "٥", "٦", "٧", "٨", "٩"];
+function _toArabicDigits(n) {
+  return String(n).split("").map((c) => (/\d/.test(c) ? _ARABIC_DIGITS[+c] : c)).join("");
+}
+
 export function formatFolio(pageIndex, { startFolio = 1, offset = 0, style = "folio", latin = false } = {}) {
   // pageIndex is 1-based
   const manuscriptIdx = pageIndex - offset;
   if (manuscriptIdx <= 0) {
-    return `[غلاف ${pageIndex}]`;
+    return `[غلاف ${_toArabicDigits(pageIndex)}]`;
   }
   if (style !== "folio") {
-    return `صفحة ${manuscriptIdx}`;
+    return `صفحة ${_toArabicDigits(manuscriptIdx)}`;
   }
   const folio = Math.ceil(manuscriptIdx / 2) + (startFolio - 1);
   const side = manuscriptIdx % 2 === 1 ? (latin ? "a" : "أ") : (latin ? "b" : "ب");
-  // Wrap with LRI/PDI so RTL contexts (UI and Word) show "1/أ" (number-slash-letter,
-  // reading left-to-right), matching manuscript-studies convention. Without the isolate,
-  // BiDi renders it as "أ/1".
-  return `\u2066${folio}/${side}\u2069`;
+  if (latin) return `${folio}/${side}`;
+  // Use Arabic-Indic digits so all glyphs are strong-RTL — BiDi renders them
+  // in logical order in an RTL context: "١/أ" reads (number → / → letter).
+  return `${_toArabicDigits(folio)}/${side}`;
 }
 
 // ------------------- Image compression export -------------------

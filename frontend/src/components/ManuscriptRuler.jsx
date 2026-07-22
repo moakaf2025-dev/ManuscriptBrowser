@@ -47,6 +47,7 @@ import {
   Play,
   Pause,
   Ruler,
+  Camera,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
@@ -404,8 +405,13 @@ export default function ManuscriptRuler() {
         const raw = localStorage.getItem(RECENTS_KEY);
         const recents = raw ? JSON.parse(raw) : [];
         const filtered = recents.filter((r) => r.fileKey !== fileKey);
-        // Electron: file.path is absolute; Browser: not available (security)
-        const filePath = file.path || file.webkitRelativePath || "";
+        // Electron 32+: File.path removed; use webUtils via preload.
+        // Browser: file paths are not exposed for security reasons.
+        let filePath = "";
+        try {
+          if (window.msElectron?.getFilePath) filePath = window.msElectron.getFilePath(file) || "";
+        } catch {}
+        if (!filePath) filePath = file.path || file.webkitRelativePath || "";
         const next = [{ fileKey, name: file.name, path: filePath, at: Date.now() }, ...filtered].slice(0, 5);
         localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
       } catch { /* noop */ }
@@ -623,19 +629,20 @@ export default function ManuscriptRuler() {
 
   // Ruler auto-scroll effect
   useEffect(() => {
-    if (!state.rulerAutoPlaying || !state.rulerAutoSpeed || !hasFile) return;
+    if (!state.rulerAutoPlaying || !hasFile) return;
     let raf;
     let last = performance.now();
     const tick = (now) => {
       const dt = (now - last) / 1000;
       last = now;
       setState((s) => {
+        if (!s.rulerAutoSpeed) return s; // paused via speed=0
         const maxY = Math.max(0, pageSizeRef.current.h - s.rulerHeight);
         const nextY = s.rulerY + s.rulerAutoSpeed * dt;
+        if (maxY <= 0) return s; // page not measured yet
         if (nextY >= maxY) {
-          // reach bottom → advance page or stop
           if (s.page < pageCount) {
-            return { ...s, page: s.page + 1, rulerY: Math.max(0, s.rulerStep * 3) };
+            return { ...s, page: s.page + 1, rulerY: 0 };
           }
           return { ...s, rulerAutoPlaying: false };
         }
@@ -646,7 +653,7 @@ export default function ManuscriptRuler() {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.rulerAutoPlaying, state.rulerAutoSpeed, hasFile, pageCount]);
+  }, [state.rulerAutoPlaying, hasFile, pageCount]);
 
   // Scroll viewer to top whenever page changes
   useEffect(() => {
@@ -656,13 +663,10 @@ export default function ManuscriptRuler() {
   // ---------------- Ruler interactions ----------------
   const clampRuler = useCallback(
     (y) => {
-      // Keep at least ~3 lines from top so the ruler doesn't hide behind
-      // the black/blank margin above the first line of text.
-      const minY = Math.max(0, state.rulerStep * 3);
-      const max = Math.max(minY, pageSize.h - state.rulerHeight);
-      return Math.min(Math.max(minY, y), max);
+      const max = Math.max(0, pageSize.h - state.rulerHeight);
+      return Math.min(Math.max(0, y), max);
     },
-    [pageSize.h, state.rulerHeight, state.rulerStep]
+    [pageSize.h, state.rulerHeight]
   );
 
   const moveRulerBy = (delta) => {
@@ -997,6 +1001,30 @@ export default function ManuscriptRuler() {
     showToast("تم حفظ بيانات المخطوط");
   };
 
+  const _fallbackCopy = async (text) => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand && document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch { return false; }
+  };
+
+  const _safeCopyText = async (text) => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch { /* fallback below */ }
+    return _fallbackCopy(text);
+  };
+
   const copyInfoAsTable = async () => {
     const info = currentInfo;
     const rows = [];
@@ -1013,20 +1041,27 @@ export default function ManuscriptRuler() {
     }
     if (info.notes) rows.push(["ملاحظات ووصف", info.notes]);
     const filtered = rows.filter(([, v]) => v && String(v).trim());
-    const tsv = filtered.map(([k, v]) => `${k}\t${String(v).replace(/\n/g, " ")}`).join("\n");
-    const html = `<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;direction:rtl">${
-      filtered.map(([k, v]) => `<tr><td><b>${escapeHtml(k)}</b></td><td>${escapeHtml(v).replace(/\n/g,"<br>")}</td></tr>`).join("")
-    }</table>`;
-    try {
-      await navigator.clipboard.write([new ClipboardItem({
-        "text/plain": new Blob([tsv], { type: "text/plain" }),
-        "text/html": new Blob([html], { type: "text/html" }),
-      })]);
-      showToast("نُسخت البطاقة كجدول");
-    } catch {
-      await navigator.clipboard.writeText(tsv);
-      showToast("نُسخت البطاقة");
+    if (filtered.length === 0) {
+      showToast("لا توجد بيانات لنسخها. عبّئ البطاقة أولاً.");
+      return;
     }
+    const tsv = filtered.map(([k, v]) => `${k}\t${String(v).replace(/\n/g, " ")}`).join("\n");
+    // Try rich HTML copy first for Word/Excel; fall back to plain text
+    try {
+      if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+        const html = `<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;direction:rtl">${
+          filtered.map(([k, v]) => `<tr><td><b>${escapeHtml(k)}</b></td><td>${escapeHtml(v).replace(/\n/g,"<br>")}</td></tr>`).join("")
+        }</table>`;
+        await navigator.clipboard.write([new ClipboardItem({
+          "text/plain": new Blob([tsv], { type: "text/plain" }),
+          "text/html": new Blob([html], { type: "text/html" }),
+        })]);
+        showToast("نُسخت البطاقة كجدول");
+        return;
+      }
+    } catch { /* fall through to plain-text */ }
+    const ok = await _safeCopyText(tsv);
+    showToast(ok ? "نُسخت البطاقة (نص عادي)" : "تعذّر النسخ إلى الحافظة");
   };
 
   // ---------------- Snip (screenshot) ----------------
@@ -1245,12 +1280,8 @@ export default function ManuscriptRuler() {
     if (info.number) parts.push(info.number);
     parts.push(`ورقة ${folio}`);
     const citation = `(${parts.join(" ")})`;
-    try {
-      await navigator.clipboard.writeText(citation);
-      showToast("نُسخ العزو: " + citation);
-    } catch {
-      showToast("تعذّر النسخ");
-    }
+    const ok = await _safeCopyText(citation);
+    showToast(ok ? "نُسخ العزو: " + citation : "تعذّر النسخ إلى الحافظة");
   };
 
   // ---------------- Comments ----------------
@@ -1321,12 +1352,8 @@ export default function ManuscriptRuler() {
     parts.push(`ورقة ${c.folio || formatFolio(c.page, { startFolio: state.folioStart, offset: state.folioOffset })}`);
     const citation = `(${parts.join(" ")})`;
     const full = `${c.text}\n\n${citation}`;
-    try {
-      await navigator.clipboard.writeText(full);
-      showToast("نُسخ التعليق مع العزو");
-    } catch {
-      showToast("تعذّر النسخ");
-    }
+    const ok = await _safeCopyText(full);
+    showToast(ok ? "نُسخ التعليق مع العزو" : "تعذّر النسخ إلى الحافظة");
   };
 
   const deleteComment = (id) => {
@@ -1517,75 +1544,30 @@ ${sorted.length === 0
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
-  // ---------------- Keyboard shortcuts ----------------
+  // ---------------- Keyboard navigation (ruler + pages) ----------------
   useEffect(() => {
     const onKey = (e) => {
-      if (showShortcuts && e.key === "Escape") {
-        setShowShortcuts(false);
-        return;
-      }
       // ignore typing in inputs
       const tag = e.target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
-      if (e.ctrlKey && e.key.toLowerCase() === "o") {
-        e.preventDefault();
-        openFile();
-        return;
-      }
-      // Space toggles ruler auto-scroll
-      if (e.code === "Space" || e.key === " ") {
-        if (hasFileRef.current) {
-          e.preventDefault();
-          setState((s) => ({ ...s, rulerAutoPlaying: !s.rulerAutoPlaying }));
-        }
-        return;
-      }
       if (e.key === "Escape") {
-        // Cancel any active selection mode
-        setSelectMode((m) => m ? null : m);
+        setSelectMode((m) => (m ? null : m));
         setSelectingRect(null);
         setActiveBubbleId(null);
         setActiveHeadingId(null);
-      }
-      if (e.ctrlKey && e.key.toLowerCase() === "b") {
-        e.preventDefault();
-        if (hasFileRef.current) openAddHeadingRef.current();
+        setShowSettings(false);
+        setOpenGroup(null);
         return;
       }
-      if (e.ctrlKey && e.key.toLowerCase() === "g") {
+      // Space toggles ruler auto-scroll
+      if ((e.code === "Space" || e.key === " ") && hasFileRef.current) {
         e.preventDefault();
-        if (hasFileRef.current) setShowBookmarks((v) => !v);
-        return;
-      }
-      if (e.ctrlKey && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        if (hasFileRef.current) openAddCommentRef.current();
-        return;
-      }
-      if (e.ctrlKey && e.key.toLowerCase() === "m") {
-        e.preventDefault();
-        if (hasFileRef.current) openAddCommentRef.current();
-        return;
-      }
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        if (hasFileRef.current) snipRef.current();
-        return;
-      }
-      if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        if (hasFileRef.current) snipRef.current();
-        return;
-      }
-      if (e.ctrlKey && (e.key === "+" || e.key === "=")) {
-        e.preventDefault();
-        zoomIn();
-        return;
-      }
-      if (e.ctrlKey && (e.key === "-" || e.key === "_")) {
-        e.preventDefault();
-        zoomOut();
+        setState((s) => {
+          const next = !s.rulerAutoPlaying;
+          const speed = next && !s.rulerAutoSpeed ? 20 : s.rulerAutoSpeed;
+          return { ...s, rulerAutoPlaying: next, rulerAutoSpeed: speed };
+        });
         return;
       }
       switch (e.key) {
@@ -1619,25 +1601,6 @@ ${sorted.length === 0
           e.preventDefault();
           lastPage();
           break;
-        case "r":
-        case "R":
-          rotate();
-          break;
-        case "h":
-        case "H":
-          toggleRuler();
-          break;
-        case "F11":
-          e.preventDefault();
-          toggleFullscreen();
-          break;
-        case "?":
-          setShowShortcuts((v) => !v);
-          break;
-        case "Escape":
-          setShowSettings(false);
-          setShowShortcuts(false);
-          break;
         default:
           break;
       }
@@ -1645,7 +1608,7 @@ ${sorted.length === 0
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.rulerStep, state.fileType, pageCount, showShortcuts]);
+  }, [state.rulerStep, state.fileType, pageCount]);
 
   // Ctrl + wheel = zoom, plain wheel at edge = navigate pages
   useEffect(() => {
@@ -1734,7 +1697,7 @@ ${sorted.length === 0
             className="mr-gbtn mr-gbtn-primary"
             onClick={openFile}
             data-testid="mr-btn-open"
-            title="فتح ملف (Ctrl+O)"
+            title="فتح ملف"
           >
             <FolderOpen size={22} />
             <span>فتح مخطوط</span>
@@ -1991,7 +1954,12 @@ ${sorted.length === 0
               <div className="mr-pop-row">
                 <button
                   className={`mr-btn mr-btn-primary`}
-                  onClick={() => setState((s) => ({ ...s, rulerAutoPlaying: !s.rulerAutoPlaying }))}
+                  onClick={() => setState((s) => {
+                    const next = !s.rulerAutoPlaying;
+                    // If turning on and speed is 0, seed a sensible default
+                    const speed = next && !s.rulerAutoSpeed ? 20 : s.rulerAutoSpeed;
+                    return { ...s, rulerAutoPlaying: next, rulerAutoSpeed: speed };
+                  })}
                   data-testid="mr-btn-auto-toggle">
                   {state.rulerAutoPlaying ? <><Pause size={14} /> إيقاف</> : <><Play size={14} /> تشغيل</>}
                 </button>
@@ -2019,14 +1987,14 @@ ${sorted.length === 0
             <div className="mr-popover" data-testid="mr-pop-comment">
               <button className="mr-pop-x" onClick={() => setOpenGroup(null)} title="إغلاق"><X size={14} /></button>
               <button className="mr-pop-item" onClick={() => { openAddComment(); setOpenGroup(null); }} data-testid="mr-pop-add-comment">
-                <MessageSquarePlus size={13} /> إضافة تعليق (Ctrl+F)
+                <MessageSquarePlus size={13} /> إضافة تعليق
               </button>
               <button className="mr-pop-item" onClick={() => { setShowComments(true); setOpenGroup(null); }} data-testid="mr-pop-list-comments">
                 <MessagesSquare size={13} /> قائمة التعليقات ({currentComments.length})
               </button>
               <div className="mr-pop-sep" />
               <button className="mr-pop-item" onClick={() => { openAddHeading(); setOpenGroup(null); }} data-testid="mr-pop-add-heading">
-                <Plus size={13} /> إضافة عنوان (Ctrl+B)
+                <Plus size={13} /> إضافة عنوان
               </button>
               <button className="mr-pop-item" onClick={() => { setShowHeadings(true); setOpenGroup(null); }} data-testid="mr-pop-list-headings">
                 <List size={13} /> قائمة العناوين ({currentHeadings.length})
@@ -2076,10 +2044,24 @@ ${sorted.length === 0
               </button>
               <div className="mr-pop-sep" />
               <button className="mr-pop-item" onClick={() => { beginSnip(); setOpenGroup(null); }} data-testid="mr-exp-snip">
-                <Scissors size={13} /> التقاط لقطة مع شرح (Ctrl+S)
+                <Scissors size={13} /> التقاط لقطة مع شرح
               </button>
             </div>
           )}
+        </div>
+
+        {/* 8. التقاط لقطة (Snip with caption) */}
+        <div className="mr-group">
+          <button
+            className={`mr-gbtn ${snipping ? "mr-gbtn-active" : ""}`}
+            onClick={() => hasFile && beginSnip()}
+            disabled={!hasFile}
+            data-testid="mr-btn-snip-top"
+            title="التقاط لقطة مع شرح نصيّ"
+          >
+            <Camera size={22} />
+            <span>لقطة</span>
+          </button>
         </div>
 
         <button
@@ -2107,7 +2089,7 @@ ${sorted.length === 0
                   onChange={(e) => {
                     const v = Number(e.target.value);
                     if (v >= 1 && v <= pageCount) {
-                      setState((s) => ({ ...s, page: v, rulerY: Math.max(0, s.rulerStep * 3) }));
+                      setState((s) => ({ ...s, page: v, rulerY: 0 }));
                     }
                   }}
                   className="mr-page-input"
@@ -2962,7 +2944,7 @@ ${sorted.length === 0
               data-testid="mr-comments-add"
             >
               <MessageSquarePlus size={14} />
-              إضافة تعليق للموضع الحالي (Ctrl+M)
+              إضافة تعليق للموضع الحالي
             </button>
 
             {currentComments.length === 0 && (
