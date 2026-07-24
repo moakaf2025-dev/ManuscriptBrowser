@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 4: Verified new .cmd + .ps1 split shortcut inside Windows portable ZIP; all encoding requirements met. Web app not regressed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_results": {
+    "download_endpoint": {
+      "url": "/api/download/windows",
+      "status": 200,
+      "content_type": "application/zip",
+      "content_length": 118946515,
+      "size_gt_100MB": true,
+      "note": "HEAD returns 405 (only GET allowed) but GET works correctly"
+    },
+    "zip_contents": {
+      "ManuscriptBrowser.exe": "present at root (188614144 bytes)",
+      "Create-Desktop-Shortcut.cmd": "present at root, 103 bytes, pure ASCII verified via .decode('ascii'). Content: '@echo off\\npowershell -NoProfile -ExecutionPolicy Bypass -File \"%~dp0Create-Desktop-Shortcut.ps1\"\\npause\\n'",
+      "Create-Desktop-Shortcut.ps1": "present at root, 3581 bytes, starts with UTF-8 BOM (ef bb bf) verified",
+      "README-اقرأني.txt": "present at root",
+      "resources/app.asar.unpacked/icon.ico": "present (101854 bytes)"
+    },
+    "web_app_regression": {
+      "url": "https://script-guide-8.preview.emergentagent.com/#ns=A",
+      "mr-splash-img_naturalWidth": 2000,
+      "mr-brand-mark_naturalWidth": 2000,
+      "about_modal_opens": true,
+      "console_errors": 0,
+      "chunk_load_errors": 0
+    }
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Windows portable ZIP now contains a proper split .cmd (ASCII launcher) + .ps1 (UTF-8 BOM PowerShell) for the Arabic desktop shortcut. All required files present at expected paths with correct encoding. Web app splash/brand images + About modal working. No regressions."
+}

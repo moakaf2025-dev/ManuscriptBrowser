@@ -31,6 +31,10 @@
         "to": "../Create-Desktop-Shortcut.cmd"
       },
       {
+        "from": "Create-Desktop-Shortcut.ps1",
+        "to": "../Create-Desktop-Shortcut.ps1"
+      },
+      {
         "from": "README-اقرأني.txt",
         "to": "../README-اقرأني.txt"
       }
