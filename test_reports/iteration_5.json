@@ -1,0 +1,46 @@
+{
+  "summary": "Verified Windows portable ZIP download, ZIP contents, custom golden 'م' icon replacement inside ManuscriptBrowser.exe, and web app regression on #ns=A.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verification_details": {
+    "download_endpoint": {
+      "url": "https://script-guide-8.preview.emergentagent.com/api/download/windows",
+      "status": 200,
+      "content_type": "application/zip",
+      "content_length": 119028065,
+      "last_modified": "Fri, 24 Jul 2026 08:03:02 GMT",
+      "result": "PASS"
+    },
+    "zip_contents": {
+      "ManuscriptBrowser.exe": "present (188751872 bytes)",
+      "Create-Desktop-Shortcut.cmd": "present",
+      "Create-Desktop-Shortcut.ps1": "present",
+      "README-اقرأني.txt": "present",
+      "resources/app.asar.unpacked/icon.ico": "present (101854 bytes)",
+      "result": "PASS"
+    },
+    "exe_icon_resources": {
+      "id_1": {"expected": 699, "actual": 699},
+      "id_2": {"expected": 1960, "actual": 1960},
+      "id_3": {"expected": 3672, "actual": 3672},
+      "id_4": {"expected": 69126, "actual": 69126, "png_magic": "89 50 4e 47 0d 0a 1a 0a (valid PNG)"},
+      "result": "PASS - custom golden 'م' icon successfully embedded (NOT default 18963-byte Electron logo)"
+    },
+    "web_regression_ns_A": {
+      "mr-splash-img_naturalWidth": 2000,
+      "mr-brand-mark_naturalWidth": 2000,
+      "about_modal_opens": true,
+      "console_errors": 0,
+      "result": "PASS"
+    }
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Icon fix verified. wrestool extracted sizes 699/1960/3672/69126 for icon IDs 1..4 matching custom icon.ico. PNG magic bytes confirmed on 256x256 resource. Web app regression clean."
+}
