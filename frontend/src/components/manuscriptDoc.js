@@ -235,7 +235,7 @@ async function getLibArchive() {
       const mod = await import("libarchive.js");
       const Archive = mod.Archive || mod.default?.Archive;
       Archive.init({
-        workerUrl: `${process.env.PUBLIC_URL || ""}/libarchive-worker.js`,
+        workerUrl: `${process.env.PUBLIC_URL || "."}/libarchive-worker.js`,
       });
       return Archive;
     })();

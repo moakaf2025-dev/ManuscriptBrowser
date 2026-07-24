@@ -54,7 +54,7 @@ import JSZip from "jszip";
 import { buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf } from "./manuscriptDoc";
 import { PDFDocument } from "pdf-lib";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `${process.env.PUBLIC_URL || ""}/pdf.worker.min.mjs`;
+pdfjsLib.GlobalWorkerOptions.workerSrc = `${process.env.PUBLIC_URL || "."}/pdf.worker.min.mjs`;
 
 // Namespace via URL param (search or hash) so each iframe pane keeps its own state.
 const NS = (() => {
@@ -1688,7 +1688,7 @@ ${sorted.length === 0
 
       <div className="mr-topbar mr-topbar-v2" data-testid="mr-topbar">
         <div className="mr-brand">
-          <img src={`${process.env.PUBLIC_URL || ""}/app-icon.png`} alt="M" className="mr-brand-mark" />
+          <img src={`${process.env.PUBLIC_URL || "."}/app-icon.png`} alt="M" className="mr-brand-mark" />
           <div className="mr-brand-name">متصفح المخطوطات</div>
         </div>
 
@@ -2155,7 +2155,7 @@ ${sorted.length === 0
         {!hasFile && (
           <div className="mr-empty mr-fade mr-empty-splash">
             <img
-              src={`${process.env.PUBLIC_URL || ""}/splash.png`}
+              src={`${process.env.PUBLIC_URL || "."}/splash.png`}
               alt="متصفح المخطوطات"
               className="mr-splash-img"
               data-testid="mr-splash-img"
@@ -3966,7 +3966,7 @@ function AboutModal({ onClose }) {
         <button className="mr-modal-x" onClick={onClose} data-testid="mr-about-close" title="إغلاق"><X size={16} /></button>
 
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14 }}>
-          <img src={`${process.env.PUBLIC_URL || ""}/app-icon.png`} alt="app" style={{ width: 56, height: 56, borderRadius: 10, boxShadow: "0 2px 12px rgba(0,0,0,.35)" }} />
+          <img src={`${process.env.PUBLIC_URL || "."}/app-icon.png`} alt="app" style={{ width: 56, height: 56, borderRadius: 10, boxShadow: "0 2px 12px rgba(0,0,0,.35)" }} />
           <div>
             <h2 style={{ fontSize: 22, margin: 0, color: "var(--amber)" }}>متصفح المخطوطات</h2>
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>أداة متخصصة للباحثين في المخطوطات</div>

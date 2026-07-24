@@ -1,0 +1,21 @@
+{
+  "summary": "Verified splash/brand image bug fix and new About modal in web app (via #ns=A URL to force child mode). All required functionality works. Splash image (naturalWidth=2000) and brand image (naturalWidth=2000) both load correctly. About modal opens, contains title/description/icon-guide (all 8 icons)/contact info/telegram+email links with correct hrefs, and closes via X, Escape and OK.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "About modal", "issues": ["Text 'اختصاصي مخطوطات' (specialist subtitle for designer) was not detected in modal innerText although 'د. محمد عمر أحمد الكاف' is shown. Likely rendered differently or truncated; visible label may be missing. Minor - verify."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": ["Optional: verify presence of 'اختصاصي مخطوطات' subtitle under designer name in AboutModal contact section."],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A", "frontend": "100%"},
+  "seed_data_creation": "",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "App runs inside iframe; navigate to <URL>/#ns=A directly to interact with ManuscriptRuler testids. Splash/brand images now use process.env.PUBLIC_URL||'.' fallback, resolving to same-origin absolute URLs in web (works) and relative in Electron.",
+  "rca of the issue": "Root cause of original bug: absolute paths '/splash.png' and '/app-icon.png' fail in Electron file:// context. Fix: use `${process.env.PUBLIC_URL || '.'}/splash.png` so it becomes './splash.png' when PUBLIC_URL is empty. Confirmed working in web build (images load with naturalWidth 2000)."
+}
