@@ -1017,6 +1017,12 @@ export default function ManuscriptRuler() {
   };
 
   const _safeCopyText = async (text) => {
+    // Prefer Electron native clipboard when available
+    try {
+      if (typeof window !== "undefined" && window.msElectron && typeof window.msElectron.copyTextToClipboard === "function") {
+        if (window.msElectron.copyTextToClipboard(text)) return true;
+      }
+    } catch { /* fallback below */ }
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(text);
@@ -1521,8 +1527,26 @@ ${sorted.length === 0
   };
 
   const copySnipToClipboard = async (dataUrl) => {
+    // 1) Prefer Electron's native clipboard when running in the desktop app
+    //    (browser clipboard API is blocked on file:// origins).
+    try {
+      if (typeof window !== "undefined" && window.msElectron && typeof window.msElectron.copyImageToClipboard === "function") {
+        const ok = window.msElectron.copyImageToClipboard(dataUrl);
+        if (ok) {
+          showToast("نُسخت اللقطة إلى الحافظة");
+          return;
+        }
+      }
+    } catch (e) {
+      console.error("electron clipboard failed", e);
+    }
+
+    // 2) Browser fallback (works in HTTPS web preview).
     try {
       const blob = await (await fetch(dataUrl)).blob();
+      if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+        throw new Error("ClipboardItem not available");
+      }
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
       showToast("نُسخت اللقطة إلى الحافظة");
     } catch (e) {
