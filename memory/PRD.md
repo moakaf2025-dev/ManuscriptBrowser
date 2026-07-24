@@ -55,3 +55,12 @@
 - ✅ Popover close X count = 1 عند فتح قائمة واحدة.
 - ✅ Electron: تم توليد `dist/win-unpacked/ManuscriptBrowser.exe` v1.6.0 + `dist/ManuscriptBrowser-Windows-Portable.zip` (~130MB).
 - ⚠️ الاختبارات الفعلية لكل ميزة تحتاج تشغيل على Windows.
+
+## v2.2.0 (24 يوليو 2026) — نافذة "عن البرنامج"
+- **أيقونة معلومات (Info)** في أقصى يمين الشريط العلوي (بجانب زر ملء الشاشة) → data-testid: `mr-btn-about`.
+- **نافذة `AboutModal`** جديدة تحتوي على:
+  - نبذة عن البرنامج (نص الفقرة الذي قدّمه المصمّم).
+  - دليل الأيقونات: 8 بطاقات (فتح، البطاقة، تصفح، ترقيم، المسطرة، تعليق، تصدير، لقطة) مع رمز ووصف لكل واحدة.
+  - قسم "للملاحظات والاقتراحات" مع بيانات المصمم: د. محمد عمر أحمد الكاف، تلجرام [@MOAKAF](https://t.me/MOAKAF)، بريد moakaf2025@gmail.com.
+- **بناء جديد**: `ManuscriptBrowser-Windows-Portable.zip` (~118MB) عبر `/api/download/windows`.
+

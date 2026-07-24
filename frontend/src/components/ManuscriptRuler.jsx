@@ -224,6 +224,7 @@ export default function ManuscriptRuler() {
   const [commentModal, setCommentModal] = useState(null); // {editingId?, page, folio, y, text}
   const [snipping, setSnipping] = useState(false);
   const [snipResult, setSnipResult] = useState(null); // {dataUrl, folio, line, filename}
+  const [showAbout, setShowAbout] = useState(false);
   const [tabs, setTabs] = useState([]);
   const [headingsMap, setHeadingsMap] = useState(() => loadKV(HEADINGS_KEY));
   const [foldOverridesMap, setFoldOverridesMap] = useState(() => loadKV(FOLD_OVERRIDES_KEY));
@@ -2073,6 +2074,15 @@ ${sorted.length === 0
           {isFs ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
         </button>
 
+        <button
+          className="mr-btn mr-btn-icon"
+          onClick={() => setShowAbout(true)}
+          title="عن البرنامج"
+          data-testid="mr-btn-about"
+        >
+          <Info size={18} />
+        </button>
+
         <div className="mr-info">
           {hasFile && (
             <>
@@ -3057,6 +3067,11 @@ ${sorted.length === 0
           />
         )}
 
+        {/* About the App Modal */}
+        {showAbout && (
+          <AboutModal onClose={() => setShowAbout(false)} />
+        )}
+
         {showHeadings && (
           <div className="mr-settings mr-fade" data-testid="mr-headings-panel" style={{ inset: "auto 10px 10px auto", top: 60, width: 340 }}>
             <h3>الفهرس والعناوين ({currentHeadings.length})
@@ -3921,3 +3936,125 @@ const SHORTCUTS = [
   { desc: "فتح/إغلاق نافذة الاختصارات", keys: ["؟"] },
   { desc: "إغلاق النوافذ", keys: ["Esc"] },
 ];
+
+
+function AboutModal({ onClose }) {
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  const iconGuide = [
+    { icon: "📂", name: "فتح مخطوط", desc: "فتح ملف PDF أو أرشيف صور (ZIP/RAR/7z) أو صور مفردة، والوصول إلى قائمة آخر المخطوطات المفتوحة." },
+    { icon: "📖", name: "البطاقة", desc: "بطاقة معلومات المخطوط: العنوان، المؤلف، الناسخ، المكتبة، رقم النسخة، تاريخ النسخ… مع نسخها كجدول لأغراض التوثيق." },
+    { icon: "🔍", name: "تصفح", desc: "أدوات التصفح: التكبير حتى 1000%، التدوير، فلاتر الصورة (عكس ألوان، تنعيم، حدّة، تشبّع) والأداة اليدوية (Hand) للتنقل." },
+    { icon: "🔢", name: "ترقيم", desc: "معالج ذكي مكوّن من خطوات لقص الصفحات المزدوجة من المنتصف، ثم ترقيم الأوراق بترقيم المخطوطات المعتمد (1/أ، 1/ب…)." },
+    { icon: "📏", name: "المسطرة", desc: "إظهار/إخفاء المسطرة الأفقية الشفافة للمساعدة في المقابلة سطراً بسطر، مع تخصيص شكلها وارتفاعها وعرضها وتشغيلها تلقائياً." },
+    { icon: "💬", name: "تعليق", desc: "إضافة تعليقات محدّدة على مناطق من المخطوط مع العزو التلقائي إلى رقم الورقة (فوليو)، وإضافة عناوين/فهرس ملاحظات." },
+    { icon: "📤", name: "تصدير", desc: "تصدير المخطوط المرقّم إلى PDF، وتصدير التعليقات والعناوين إلى Word مع الترقيم العربي الصحيح، وضغط الصور." },
+    { icon: "📷", name: "لقطة", desc: "أداة القصّ (Snip): تحديد أي منطقة من المخطوط، إضافة شرح نصي عليها، ثم حفظها كصورة PNG أو نسخها إلى الحافظة." },
+  ];
+
+  return (
+    <div className="mr-shortcuts-panel" onClick={onClose} data-testid="mr-about-modal">
+      <div
+        className="mr-shortcuts-card mr-fade"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: 720, maxHeight: "88vh", overflowY: "auto", position: "relative", padding: "22px 26px" }}
+      >
+        <button className="mr-modal-x" onClick={onClose} data-testid="mr-about-close" title="إغلاق"><X size={16} /></button>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14 }}>
+          <img src={`${process.env.PUBLIC_URL || ""}/app-icon.png`} alt="app" style={{ width: 56, height: 56, borderRadius: 10, boxShadow: "0 2px 12px rgba(0,0,0,.35)" }} />
+          <div>
+            <h2 style={{ fontSize: 22, margin: 0, color: "var(--amber)" }}>متصفح المخطوطات</h2>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>أداة متخصصة للباحثين في المخطوطات</div>
+          </div>
+        </div>
+
+        <section style={{ marginBottom: 16 }}>
+          <h3 style={{ fontSize: 15, color: "var(--amber)", marginBottom: 6, borderBottom: "1px solid var(--line)", paddingBottom: 4 }}>نبذة عن البرنامج</h3>
+          <p style={{ fontSize: 13.5, lineHeight: 1.9, color: "var(--parchment)", margin: 0, textAlign: "justify" }}>
+            هو أداة صغيرة مصمّمة لتصفّح ملفات مصوّرات المخطوطات ومساعدة الباحثين على دراستها والعزو لها في بحوثهم ومنشوراتهم.
+            يتيح للمستخدمين إمكانيات قصّ صفحات المخطوط من المنتصف، وترقيم أوراق المخطوط بترقيم الأوراق المعتمَد في المخطوطات،
+            وكتابة بيانات فهرسة المخطوط، والمساعدة على مقابلة المخطوط بتركيز عبر أداة المسطرة، والتعليق على المخطوط ووضع عناوين له،
+            والعزو إلى هذه التعليقات في المخطوط برقم الورقة، وتصدير هذه التعليقات والعناوين إلى ملفات Word لأغراض دراسة المخطوط،
+            واقتصاص الصور من المخطوط وكتابة الشروح على الصور، وضغط أحجام مصوّرات المخطوطات كبيرة الحجم.
+          </p>
+        </section>
+
+        <section style={{ marginBottom: 16 }}>
+          <h3 style={{ fontSize: 15, color: "var(--amber)", marginBottom: 8, borderBottom: "1px solid var(--line)", paddingBottom: 4 }}>دليل الأيقونات</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+            {iconGuide.map((g) => (
+              <div
+                key={g.name}
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "flex-start",
+                  background: "var(--ink-3)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                }}
+              >
+                <div style={{ fontSize: 22, flexShrink: 0, width: 32, textAlign: "center" }}>{g.icon}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5, color: "var(--amber)", marginBottom: 2 }}>{g.name}</div>
+                  <div style={{ fontSize: 12.5, lineHeight: 1.75, color: "var(--parchment)" }}>{g.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section style={{ marginBottom: 6 }}>
+          <h3 style={{ fontSize: 15, color: "var(--amber)", marginBottom: 8, borderBottom: "1px solid var(--line)", paddingBottom: 4 }}>
+            للملاحظات والاقتراحات
+          </h3>
+          <div style={{ background: "var(--ink-3)", border: "1px solid var(--line)", borderRadius: 8, padding: "12px 14px", fontSize: 13.5, lineHeight: 2 }}>
+            <div style={{ marginBottom: 6 }}>
+              تواصل مع مصمّم البرنامج:
+            </div>
+            <div style={{ fontWeight: 700, color: "var(--amber)", fontSize: 14 }}>
+              د. محمد عمر أحمد الكاف
+            </div>
+            <div style={{ color: "var(--muted)", fontSize: 12.5, marginBottom: 8 }}>
+              اختصاصيّ مخطوطات
+            </div>
+            <div style={{ display: "grid", gap: 4 }}>
+              <div>
+                <span style={{ color: "var(--muted)" }}>تلجرام: </span>
+                <a
+                  href="https://t.me/MOAKAF"
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "var(--amber)", textDecoration: "none", direction: "ltr", unicodeBidi: "embed" }}
+                  data-testid="mr-about-telegram"
+                >
+                  @MOAKAF
+                </a>
+              </div>
+              <div>
+                <span style={{ color: "var(--muted)" }}>البريد الإلكتروني: </span>
+                <a
+                  href="mailto:moakaf2025@gmail.com"
+                  style={{ color: "var(--amber)", textDecoration: "none", direction: "ltr", unicodeBidi: "embed" }}
+                  data-testid="mr-about-email"
+                >
+                  moakaf2025@gmail.com
+                </a>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+          <button className="mr-btn mr-btn-primary" onClick={onClose} data-testid="mr-about-ok">حسناً</button>
+        </div>
+      </div>
+    </div>
+  );
+}
