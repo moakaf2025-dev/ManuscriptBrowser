@@ -1,8 +1,28 @@
-const { app, BrowserWindow, Menu, shell, ipcMain, desktopCapturer, dialog } = require("electron");
+const { app, BrowserWindow, Menu, shell, ipcMain, desktopCapturer, dialog, nativeImage } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
+// Windows taskbar identification (helps show correct icon + name)
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.moakaf.manuscriptbrowser");
+}
+
+// Resolve icon path: when packed, icon.ico is in app.asar.unpacked; in dev, alongside main.js
+function resolveIconPath() {
+  const candidates = [
+    path.join(process.resourcesPath || "", "app.asar.unpacked", "icon.ico"),
+    path.join(__dirname, "icon.ico"),
+    path.join(process.resourcesPath || "", "app.asar.unpacked", "icon.png"),
+    path.join(__dirname, "icon.png"),
+  ];
+  for (const p of candidates) {
+    try { if (p && fs.existsSync(p)) return p; } catch {}
+  }
+  return path.join(__dirname, "icon.ico");
+}
+
 function createWindow() {
+  const iconPath = resolveIconPath();
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -11,7 +31,7 @@ function createWindow() {
     backgroundColor: "#1a1613",
     autoHideMenuBar: true,
     title: "متصفح المخطوطات",
-    icon: path.join(__dirname, "icon.ico"),
+    icon: nativeImage.createFromPath(iconPath),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

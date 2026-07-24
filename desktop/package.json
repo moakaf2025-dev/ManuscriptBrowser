@@ -14,12 +14,26 @@
     "appId": "com.moakaf.manuscriptbrowser",
     "productName": "ManuscriptBrowser",
     "asar": true,
+    "asarUnpack": [
+      "icon.ico",
+      "icon.png"
+    ],
     "files": [
       "main.js",
       "preload.js",
       "icon.png",
       "icon.ico",
       "app/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "Create-Desktop-Shortcut.cmd",
+        "to": "../Create-Desktop-Shortcut.cmd"
+      },
+      {
+        "from": "README-اقرأني.txt",
+        "to": "../README-اقرأني.txt"
+      }
     ],
     "directories": {
       "output": "dist"

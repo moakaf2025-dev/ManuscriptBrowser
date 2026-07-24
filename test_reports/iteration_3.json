@@ -1,0 +1,43 @@
+{
+  "summary": "Regression test after Windows Electron packaging tweaks. ZIP download (118MB) served correctly with all 4 required entries present (ManuscriptBrowser.exe, Create-Desktop-Shortcut.cmd, README-اقرأني.txt, resources/app.asar.unpacked/icon.ico). Web app loads without regressions: splash brand mark (م gold icon), title مُتَصَفِّحُ المخْطُوطَاتِ, toolbar with all buttons, footer attribution all render correctly. No console errors. #ns=A child mode navigation works.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "INFO ONLY (not a regression, not blocking): The data-testid attributes referenced in the review request (mr-splash-img, mr-brand-mark, mr-btn-about, mr-about-modal, mr-file-input, mr-scroll) are NOT present in the rendered DOM. Only these testids exist: sv-root, sv-bar, sv-panes-1, sv-panes-2, sv-body, sv-pane-A. Interactive elements like the toolbar buttons use class-based hooks (.mr-btn) with Arabic title attributes. If robust E2E testing is desired, main agent should add the promised data-testid attributes to the splash image, brand mark, about button/modal, file input, and scroll viewer."
+  ],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "zip_verification": {
+    "http_status": 200,
+    "content_type": "application/zip",
+    "size_bytes": 118945701,
+    "size_mb": 113.4,
+    "required_entries_present": {
+      "ManuscriptBrowser.exe (root)": true,
+      "Create-Desktop-Shortcut.cmd (root)": true,
+      "README-اقرأني.txt (root)": true,
+      "resources/app.asar.unpacked/icon.ico": true
+    }
+  },
+  "web_regression_verification": {
+    "splash_visible": true,
+    "brand_mark_visible": true,
+    "toolbar_rendered": true,
+    "child_mode_nav_ok": true,
+    "console_errors": 0,
+    "chunk_load_errors": 0
+  },
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Created /tmp/test_upload.zip with minimal JPEG for upload test",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Windows packaging (icon.ico unpack, appUserModelId, Create-Desktop-Shortcut.cmd, README-اقرأني.txt) is fully wired into the ZIP artifact. Web app has no regressions. The data-testids described in review requests don't exist in DOM; only sv-* testids exist. For future UI E2E, either add the mr-* testids or use class-based selectors like .mr-btn plus title attributes (e.g., button[title='فتح مخطوطات'] uses a click-triggered native file picker via showOpenFilePicker/hidden input outside DOM tree). The actual 'Open' button is not a <button> element — it's rendered with class .mr-btn but as a div/span. Full ZIP was not extracted (only listed) per instructions."
+}
