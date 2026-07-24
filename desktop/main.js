@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, shell, ipcMain, desktopCapturer, dialog, nativeImage } = require("electron");
+const { app, BrowserWindow, Menu, shell, ipcMain, desktopCapturer, dialog, nativeImage, clipboard } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
@@ -83,6 +83,28 @@ ipcMain.handle("ms:save-file", async (event, payload) => {
   const full = path.join(targetDir, filename);
   fs.writeFileSync(full, Buffer.from(bytes));
   return full;
+});
+
+// ---- Clipboard IPC handlers (renderer cannot access `clipboard` directly) ----
+ipcMain.handle("clipboard:image", async (_event, dataUrl) => {
+  try {
+    if (!dataUrl || typeof dataUrl !== "string") return false;
+    const img = nativeImage.createFromDataURL(dataUrl);
+    if (!img || img.isEmpty()) return false;
+    clipboard.writeImage(img);
+    return true;
+  } catch (e) {
+    return false;
+  }
+});
+
+ipcMain.handle("clipboard:text", async (_event, text) => {
+  try {
+    clipboard.writeText(String(text ?? ""));
+    return true;
+  } catch (e) {
+    return false;
+  }
 });
 
 app.whenReady().then(createWindow);

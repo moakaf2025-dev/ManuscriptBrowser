@@ -1020,7 +1020,8 @@ export default function ManuscriptRuler() {
     // Prefer Electron native clipboard when available
     try {
       if (typeof window !== "undefined" && window.msElectron && typeof window.msElectron.copyTextToClipboard === "function") {
-        if (window.msElectron.copyTextToClipboard(text)) return true;
+        const ok = await window.msElectron.copyTextToClipboard(text);
+        if (ok) return true;
       }
     } catch { /* fallback below */ }
     try {
@@ -1531,7 +1532,7 @@ ${sorted.length === 0
     //    (browser clipboard API is blocked on file:// origins).
     try {
       if (typeof window !== "undefined" && window.msElectron && typeof window.msElectron.copyImageToClipboard === "function") {
-        const ok = window.msElectron.copyImageToClipboard(dataUrl);
+        const ok = await window.msElectron.copyImageToClipboard(dataUrl);
         if (ok) {
           showToast("نُسخت اللقطة إلى الحافظة");
           return;
