@@ -740,6 +740,19 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   overflow-y: hidden;
   flex-direction: row;
 }
+/* Inline caution inside a popover — used when the recipe and the manual sliders
+   are both on and could be fighting each other. */
+.mr-pop-note {
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--amber);
+  background: rgba(242, 193, 78, 0.08);
+  border: 1px solid rgba(242, 193, 78, 0.35);
+  border-radius: 5px;
+  padding: 6px 8px;
+  margin: 6px 0;
+}
+
 /* ============ Page manager ============ */
 .mr-pm-overlay {
   position: fixed;

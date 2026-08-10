@@ -290,7 +290,7 @@ export default function ManuscriptRuler() {
   const thumbsDragRef = useRef(null);
   const [headingModal, setHeadingModal] = useState(null); // {editingId?, page, title, level}
   const [toast, setToast] = useState("");
-  const [showAdvancedImage, setShowAdvancedImage] = useState(false);
+  const [showManualImage, setShowManualImage] = useState(false);
   // The page manager edits a working copy; nothing takes effect until "تطبيق".
   const [workingOrder, setWorkingOrder] = useState([]);
   const [pmDragIdx, setPmDragIdx] = useState(null);
@@ -460,6 +460,17 @@ export default function ManuscriptRuler() {
     });
     showToast(message);
   };
+  // How many manual adjustments are away from their default — shown on the collapsed
+  // section so a setting left on months ago is not invisible.
+  const manualImageActive = [
+    state.brightness !== DEFAULT_STATE.brightness,
+    state.contrast !== DEFAULT_STATE.contrast,
+    state.saturate !== DEFAULT_STATE.saturate,
+    state.sharpen !== DEFAULT_STATE.sharpen,
+    state.denoise !== DEFAULT_STATE.denoise,
+    state.invert, state.invertR, state.invertG, state.invertB,
+  ].filter(Boolean).length;
+
   // Patch the recipe, keeping the rest of it.
   const setEnhance = (patch) =>
     setState((s) => ({ ...s, enhance: { ...DEFAULT_RECIPE, ...(s.enhance || {}), ...patch } }));
@@ -2142,38 +2153,11 @@ export default function ManuscriptRuler() {
                   ✋ {handTool ? "أوقف أداة اليد" : "أداة اليد (للتنقل)"}
                 </button>
               </div>
-              <div className="mr-pop-title">فلاتر الصورة:</div>
-              <div className="mr-field">
-                <label>السطوع <span className="val">{state.brightness}%</span></label>
-                <input type="range" min="30" max="220" value={state.brightness}
-                  onChange={(e) => setState((s) => ({ ...s, brightness: Number(e.target.value) }))} data-testid="mr-set-brightness" />
-              </div>
-              <div className="mr-field">
-                <label>التباين <span className="val">{state.contrast}%</span></label>
-                <input type="range" min="30" max="280" value={state.contrast}
-                  onChange={(e) => setState((s) => ({ ...s, contrast: Number(e.target.value) }))} data-testid="mr-set-contrast" />
-              </div>
-              <div className="mr-field">
-                <label>الحدة (Sharpen) <span className="val">{state.sharpen}%</span></label>
-                <input type="range" min="0" max="100" value={state.sharpen}
-                  onChange={(e) => setState((s) => ({ ...s, sharpen: Number(e.target.value) }))} data-testid="mr-set-sharpen" />
-              </div>
-              <div className="mr-field">
-                <label>إزالة التشويش <span className="val">{state.denoise}%</span></label>
-                <input type="range" min="0" max="100" value={state.denoise}
-                  onChange={(e) => setState((s) => ({ ...s, denoise: Number(e.target.value) }))} data-testid="mr-set-denoise" />
-              </div>
-              <div className="mr-pop-row">
-                <button className={`mr-btn ${state.invert ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invert: !s.invert }))} data-testid="mr-set-invert" style={{ flex: 1, justifyContent: "center" }}>
-                  <SunMedium size={12} /> نيجاتيف كامل
-                </button>
-                <button className="mr-btn" onClick={resetImage} data-testid="mr-btn-reset-image" title="إعادة إعدادات الصورة إلى الافتراضي">
-                  <RotateCcw size={13} /> استعادة الافتراضي
-                </button>
-              </div>
-
-              {/* Legibility recipe: a fixed sequence, tuned on the page in front of
-                  you and then in force for the whole manuscript. */}
+              {/* Two ways to change how the page looks, so they are kept apart and
+                  ordered by what a reader reaches for first. The recipe is the tool
+                  for actually reading a faded hand; the manual sliders are for
+                  nudging a page that is already legible. Mixing them in one list is
+                  what made the panel confusing. */}
               <div className="mr-pop-title">توضيح المخطوط:</div>
               <div className="mr-pop-row">
                 <button
@@ -2219,29 +2203,61 @@ export default function ManuscriptRuler() {
                 </>
               )}
 
-              {/* The rest are for occasional use; folded away so the common four stay
-                  at the top of the panel instead of being buried. */}
               <button
                 className="mr-btn"
-                onClick={() => setShowAdvancedImage((v) => !v)}
-                data-testid="mr-btn-advanced-image"
-                style={{ width: "100%", justifyContent: "center", marginTop: 6 }}
+                onClick={() => setShowManualImage((v) => !v)}
+                data-testid="mr-btn-manual-image"
+                style={{ width: "100%", justifyContent: "center", marginTop: 10 }}
               >
-                <Sliders size={13} /> خيارات متقدمة {showAdvancedImage ? "▴" : "▾"}
+                <Sliders size={13} /> تعديلات يدوية {manualImageActive ? `(${manualImageActive} مفعّل)` : ""} {showManualImage ? "▴" : "▾"}
               </button>
-              {showAdvancedImage && (
+
+              {showManualImage && (
                 <>
+                  {state.enhance?.enabled && manualImageActive > 0 && (
+                    <div className="mr-pop-note" data-testid="mr-manual-warning">
+                      التوضيح مفعّل مع تعديلات يدوية — قد يتداخلان. أوقف أحدهما إن بدت الصفحة غريبة.
+                    </div>
+                  )}
+                  <div className="mr-field">
+                    <label>السطوع <span className="val">{state.brightness}%</span></label>
+                    <input type="range" min="30" max="220" value={state.brightness}
+                      onChange={(e) => setState((s) => ({ ...s, brightness: Number(e.target.value) }))} data-testid="mr-set-brightness" />
+                  </div>
+                  <div className="mr-field">
+                    <label>التباين <span className="val">{state.contrast}%</span></label>
+                    <input type="range" min="30" max="280" value={state.contrast}
+                      onChange={(e) => setState((s) => ({ ...s, contrast: Number(e.target.value) }))} data-testid="mr-set-contrast" />
+                  </div>
                   <div className="mr-field">
                     <label>الإشباع <span className="val">{state.saturate}%</span></label>
                     <input type="range" min="0" max="300" value={state.saturate}
                       onChange={(e) => setState((s) => ({ ...s, saturate: Number(e.target.value) }))} data-testid="mr-set-saturate" />
                   </div>
-                  <div className="mr-pop-title">عكس قناة لونية بمفردها:</div>
-                  <div className="mr-pop-row">
-                    <button className={`mr-btn ${state.invertR ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertR: !s.invertR }))} data-testid="mr-set-invert-r" style={{color: state.invertR ? "#ff6b6b" : undefined}}>R</button>
-                    <button className={`mr-btn ${state.invertG ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertG: !s.invertG }))} data-testid="mr-set-invert-g" style={{color: state.invertG ? "#5cff8f" : undefined}}>G</button>
-                    <button className={`mr-btn ${state.invertB ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertB: !s.invertB }))} data-testid="mr-set-invert-b" style={{color: state.invertB ? "#6ba8ff" : undefined}}>B</button>
+                  <div className="mr-field">
+                    <label>الحدة (Sharpen) <span className="val">{state.sharpen}%</span></label>
+                    <input type="range" min="0" max="100" value={state.sharpen}
+                      onChange={(e) => setState((s) => ({ ...s, sharpen: Number(e.target.value) }))} data-testid="mr-set-sharpen" />
                   </div>
+                  <div className="mr-field">
+                    <label>إزالة التشويش <span className="val">{state.denoise}%</span></label>
+                    <input type="range" min="0" max="100" value={state.denoise}
+                      onChange={(e) => setState((s) => ({ ...s, denoise: Number(e.target.value) }))} data-testid="mr-set-denoise" />
+                  </div>
+
+                  <div className="mr-pop-title">عكس الألوان:</div>
+                  <div className="mr-pop-row">
+                    <button className={`mr-btn ${state.invert ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invert: !s.invert }))} data-testid="mr-set-invert" style={{ flex: 1, justifyContent: "center" }}>
+                      <SunMedium size={12} /> نيجاتيف كامل
+                    </button>
+                    <button className={`mr-btn ${state.invertR ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertR: !s.invertR }))} data-testid="mr-set-invert-r" style={{color: state.invertR ? "#ff6b6b" : undefined}} title="عكس القناة الحمراء وحدها">R</button>
+                    <button className={`mr-btn ${state.invertG ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertG: !s.invertG }))} data-testid="mr-set-invert-g" style={{color: state.invertG ? "#5cff8f" : undefined}} title="عكس القناة الخضراء وحدها">G</button>
+                    <button className={`mr-btn ${state.invertB ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertB: !s.invertB }))} data-testid="mr-set-invert-b" style={{color: state.invertB ? "#6ba8ff" : undefined}} title="عكس القناة الزرقاء وحدها">B</button>
+                  </div>
+
+                  <button className="mr-btn" onClick={resetImage} data-testid="mr-btn-reset-image" style={{ width: "100%", justifyContent: "center", marginTop: 6 }}>
+                    <RotateCcw size={13} /> استعادة التعديلات اليدوية
+                  </button>
                 </>
               )}
             </div>
