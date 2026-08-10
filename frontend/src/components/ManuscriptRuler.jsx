@@ -52,6 +52,7 @@ import {
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
 import { buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf } from "./manuscriptDoc";
+import { buildHeadingsDocument, buildCommentsDocument, toDocxBlob } from "./manuscriptExport";
 import { PDFDocument } from "pdf-lib";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `${process.env.PUBLIC_URL || "."}/pdf.worker.min.mjs`;
@@ -1479,116 +1480,62 @@ export default function ManuscriptRuler() {
     if (c.x != null) setActiveBubbleId(c.id);
   };
 
-  const exportHeadingsAsWord = () => {
-    if (!currentHeadings.length) {
-      showToast("لا توجد عناوين لتصديرها");
-      return;
-    }
-    const info = currentInfo;
-    const sorted = [...currentHeadings].sort((a, b) => a.page - b.page);
-    const rows = sorted.map((h, i) => {
-      const folio = formatFolio(h.page, { startFolio: state.folioStart, offset: state.folioOffset });
-      const indent = "&nbsp;".repeat((h.level - 1) * 4);
-      return `<tr><td>${i + 1}</td><td>${escapeHtml(folio)}</td><td>${indent}${escapeHtml(h.title)}</td><td>${h.level}</td></tr>`;
-    }).join("\n");
-    const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8" />
-<title>عناوين المخطوط - ${escapeHtml(info.title || state.fileName || "بدون عنوان")}</title>
-<style>body{font-family:'Traditional Arabic','Amiri','Noto Naskh Arabic',serif;font-size:14pt;line-height:1.8;padding:30px}h1{font-size:22pt;border-bottom:2px solid #333;padding-bottom:10px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px 10px;text-align:right}th{background:#eee}</style></head>
-<body><h1>عناوين المخطوط</h1>
-<p><b>المكتبة:</b> ${escapeHtml(info.library || "-")} — <b>رقم النسخة:</b> ${escapeHtml(info.number || "-")}</p>
-${info.title ? `<p><b>العنوان:</b> ${escapeHtml(info.title)}</p>` : ""}
-<table><thead><tr><th>#</th><th>الورقة</th><th>العنوان</th><th>المستوى</th></tr></thead><tbody>${rows}</tbody></table>
-</body></html>`;
-    const blob = new Blob(["\ufeff" + html], { type: "application/msword;charset=utf-8" });
+  const saveDocx = async (docxDocument, suffix) => {
+    const blob = await toDocxBlob(docxDocument);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    const base = (info.title || state.fileName || "manuscript").replace(/\.[^.]+$/, "").replace(/[/\\?%*:|"<>]/g, "-");
-    a.download = `${base}-عناوين.doc`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-    showToast("تم تصدير العناوين");
-  };
-
-  const exportCommentsAsWord = () => {
-    if (!currentComments.length && !hasInfoFilled(currentInfo)) {
-      showToast("لا توجد بيانات لتصديرها");
-      return;
-    }
-    const info = currentInfo;
-    const sorted = [...currentComments].sort((a, b) => a.page - b.page || a.y - b.y);
-    const rows = sorted
-      .map((c, i) => {
-        const dt = new Date(c.createdAt).toLocaleString("ar-EG");
-        const safeText = escapeHtml(c.text).replace(/\n/g, "<br>");
-        const ref = c.line ? `${escapeHtml(c.folio)} · س${c.line}` : escapeHtml(c.folio);
-        return `<tr><td>${i + 1}</td><td>${ref}</td><td>${safeText}</td><td>${dt}</td></tr>`;
-      })
-      .join("\n");
-
-    const html = `<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-<meta charset="utf-8" />
-<title>تعليقات المخطوط - ${escapeHtml(info.title || state.fileName || "بدون عنوان")}</title>
-<style>
-  body { font-family: 'Traditional Arabic', 'Amiri', 'Noto Naskh Arabic', serif; font-size: 14pt; line-height: 1.8; padding: 30px; }
-  h1 { font-size: 22pt; border-bottom: 2px solid #333; padding-bottom: 10px; }
-  h2 { font-size: 16pt; margin-top: 24px; color: #444; border-bottom: 1px solid #999; padding-bottom: 6px; }
-  .info { border: 1px solid #ccc; padding: 12px 16px; background: #fafafa; margin-bottom: 20px; }
-  .info div { margin: 4px 0; }
-  .info b { display: inline-block; min-width: 140px; }
-  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-  th, td { border: 1px solid #999; padding: 8px 10px; vertical-align: top; text-align: right; }
-  th { background: #eee; font-size: 12pt; }
-  td:first-child { text-align: center; width: 40px; }
-  td:nth-child(2) { text-align: center; width: 80px; font-weight: bold; color: #8b6a1c; }
-  td:last-child { width: 140px; font-size: 11pt; color: #666; }
-</style>
-</head>
-<body>
-<h1>تعليقات المخطوط</h1>
-<div class="info">
-  ${info.title ? `<div><b>عنوان المخطوط:</b> ${escapeHtml(info.title)}</div>` : ""}
-  ${info.altTitle ? `<div><b>عناوين أخرى:</b> ${escapeHtml(info.altTitle)}</div>` : ""}
-  ${info.author ? `<div><b>المؤلف:</b> ${escapeHtml(info.author)}</div>` : ""}
-  ${info.copyist ? `<div><b>الناسخ:</b> ${escapeHtml(info.copyist)}</div>` : ""}
-  ${info.copyDate ? `<div><b>تاريخ النسخ:</b> ${escapeHtml(info.copyDate)}</div>` : ""}
-  ${info.era ? `<div><b>العصر / القرن:</b> ${escapeHtml(info.era)}</div>` : ""}
-  ${info.number ? `<div><b>رقم النسخة:</b> ${escapeHtml(info.number)}</div>` : ""}
-  ${info.library ? `<div><b>المكتبة:</b> ${escapeHtml(info.library)}</div>` : ""}
-  ${info.catalog ? `<div><b>الفهرسة:</b> ${escapeHtml(info.catalog)}</div>` : ""}
-  ${info.subject ? `<div><b>الموضوع:</b> ${escapeHtml(info.subject)}</div>` : ""}
-  ${info.language ? `<div><b>اللغة:</b> ${escapeHtml(info.language)}</div>` : ""}
-  ${info.script ? `<div><b>نوع الخط:</b> ${escapeHtml(info.script)}</div>` : ""}
-  ${info.foliosCount ? `<div><b>عدد الأوراق:</b> ${escapeHtml(info.foliosCount)}</div>` : ""}
-  ${info.dimensions ? `<div><b>الأبعاد:</b> ${escapeHtml(info.dimensions)}</div>` : ""}
-  ${info.downloadUrl ? `<div><b>رابط التحميل:</b> <a href="${escapeHtml(info.downloadUrl)}">${escapeHtml(info.downloadUrl)}</a></div>` : ""}
-  ${info.notes ? `<div><b>ملاحظات فهرسة:</b> ${escapeHtml(info.notes).replace(/\n/g, "<br>")}</div>` : ""}
-  <div><b>الملف:</b> ${escapeHtml(state.fileName || "")}</div>
-  <div><b>تاريخ التصدير:</b> ${new Date().toLocaleString("ar-EG")}</div>
-  <div><b>عدد التعليقات:</b> ${sorted.length}</div>
-</div>
-${sorted.length === 0
-  ? "<p><i>لا توجد تعليقات مسجّلة لهذا المخطوط.</i></p>"
-  : `<h2>قائمة التعليقات</h2>
-     <table>
-       <thead><tr><th>#</th><th>العزو (الفوليو)</th><th>نص التعليق</th><th>تاريخ الإضافة</th></tr></thead>
-       <tbody>${rows}</tbody>
-     </table>`}
-</body></html>`;
-
-    const blob = new Blob(["\ufeff" + html], { type: "application/msword;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const base = (info.title || state.fileName || "manuscript").replace(/\.[^.]+$/, "").replace(/[/\\?%*:|"<>]/g, "-");
-    a.download = `${base}-تعليقات.doc`;
+    const base = (currentInfo.title || state.fileName || "manuscript")
+      .replace(/\.[^.]+$/, "")
+      .replace(/[/\\?%*:|"<>]/g, "-");
+    a.download = `${base}-${suffix}.docx`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 5000);
-    showToast("تم تصدير التعليقات");
+  };
+
+  const exportHeadingsAsWord = async () => {
+    if (!currentHeadings.length) {
+      showToast("لا توجد عناوين لتصديرها");
+      return;
+    }
+    try {
+      await saveDocx(
+        buildHeadingsDocument({
+          info: currentInfo,
+          headings: currentHeadings,
+          fileName: state.fileName,
+          folio: (page) => formatFolio(page, { startFolio: state.folioStart, offset: state.folioOffset }),
+        }),
+        "عناوين"
+      );
+      showToast("تم تصدير العناوين");
+    } catch (e) {
+      console.error(e);
+      showToast("تعذّر تصدير العناوين");
+    }
+  };
+
+  const exportCommentsAsWord = async () => {
+    if (!currentComments.length && !hasInfoFilled(currentInfo)) {
+      showToast("لا توجد بيانات لتصديرها");
+      return;
+    }
+    try {
+      await saveDocx(
+        buildCommentsDocument({
+          info: currentInfo,
+          comments: currentComments,
+          fileName: state.fileName,
+        }),
+        "تعليقات"
+      );
+      showToast("تم تصدير التعليقات");
+    } catch (e) {
+      console.error(e);
+      showToast("تعذّر تصدير التعليقات");
+    }
   };
 
   const performSnip = async (rect) => {

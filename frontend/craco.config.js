@@ -82,6 +82,11 @@ let webpackConfig = {
   webpack: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
+      // CRA 5 runs babel over .js/.mjs files in node_modules, and it cannot compile
+      // docx's ESM bundle ("super() in an arrow function with default or rest
+      // parameters"). The CommonJS build is the same library and the rule does not
+      // match .cjs, so it passes through untouched.
+      docx: path.resolve(__dirname, 'node_modules/docx/dist/index.cjs'),
     },
     configure: (webpackConfig) => {
 

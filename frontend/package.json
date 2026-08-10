@@ -4,6 +4,7 @@
   "private": true,
   "homepage": "./",
   "dependencies": {
+    "docx": "9.7.1",
     "jszip": "3.10.1",
     "libarchive.js": "2.0.2",
     "lucide-react": "0.516.0",

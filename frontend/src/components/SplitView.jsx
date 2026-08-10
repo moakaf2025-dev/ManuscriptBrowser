@@ -4,8 +4,13 @@ import ManuscriptRuler from "@/components/ManuscriptRuler";
 
 /**
  * SplitView renders 1 or 2 ManuscriptRuler panes side-by-side.
- * - Single pane (default): renders the component directly (no iframes, best perf).
- * - Two panes: renders iframes so each has its own document + localStorage namespace.
+ * - Every pane is an iframe, single-pane mode included, so each gets its own
+ *   document, keyboard focus and localStorage namespace (`#ns=A` / `#ns=B`).
+ * - Pane A's iframe therefore stays mounted across a mode switch, which is what
+ *   keeps the open manuscript and its reading position alive when the user
+ *   toggles between one and two panes. Rendering it directly in single-pane mode
+ *   would save one app instance in memory but drop the loaded document on every
+ *   toggle — the trade was made deliberately in favour of not losing the file.
  * - Users can drag the vertical divider to resize.
  */
 export default function SplitView() {
