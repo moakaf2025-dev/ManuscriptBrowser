@@ -51,7 +51,7 @@ import {
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
-import { buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf, fitCanvasScale } from "./manuscriptDoc";
+import { buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf, fitCanvasScale, FILTERED_MAX_PIXELS } from "./manuscriptDoc";
 import { buildHeadingsDocument, buildCommentsDocument, toDocxBlob } from "./manuscriptExport";
 import {
   BookmarkModal, InfoEditorModal, HeadingModal, CommentModal,
@@ -237,7 +237,6 @@ export default function ManuscriptRuler() {
   const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("جارٍ تحميل الصفحة…");
-  const [showSettings, setShowSettings] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
   const [showFolioSettings, setShowFolioSettings] = useState(false);
@@ -276,6 +275,7 @@ export default function ManuscriptRuler() {
   const thumbsDragRef = useRef(null);
   const [headingModal, setHeadingModal] = useState(null); // {editingId?, page, title, level}
   const [toast, setToast] = useState("");
+  const [showAdvancedImage, setShowAdvancedImage] = useState(false);
 
   const hasFile = Boolean(doc);
 
@@ -425,6 +425,27 @@ export default function ManuscriptRuler() {
     foldOverridesForCurrentFileRef.current = foldOverridesMap[state.fileKey] || {};
   }, [foldOverridesMap, state.fileKey]);
 
+  // Put a group of settings back to DEFAULT_STATE without disturbing the rest —
+  // the page you are on, the file, the folio numbering all stay put.
+  const resetGroup = (keys, message) => {
+    setState((s) => {
+      const next = { ...s };
+      for (const k of keys) next[k] = DEFAULT_STATE[k];
+      return next;
+    });
+    showToast(message);
+  };
+  const resetImage = () =>
+    resetGroup(
+      ["brightness", "contrast", "saturate", "sharpen", "denoise", "invert", "invertR", "invertG", "invertB"],
+      "أُعيدت إعدادات الصورة إلى الافتراضي"
+    );
+  const resetRuler = () =>
+    resetGroup(
+      ["rulerHeight", "rulerWidth", "rulerAlign", "rulerColor", "rulerOpacity", "rulerShape", "rulerTilt", "rulerStep", "dimAlpha", "dimEnabled", "rulerAutoSpeed"],
+      "أُعيدت إعدادات المسطرة إلى الافتراضي"
+    );
+
   const showToast = (msg) => {
     setToast(msg);
     clearTimeout(showToast._t);
@@ -565,8 +586,17 @@ export default function ManuscriptRuler() {
         const viewport = page.getViewport({ scale: renderScale, rotation: state.rotation });
         // Keep the backing store inside what Chromium will actually allocate; at the
         // top zoom levels on a full-size scan this drops below 1 and the page renders
-        // a little soft instead of not at all.
-        const dpr = fitCanvasScale(viewport.width, viewport.height, Math.min(window.devicePixelRatio || 1, 2));
+        // a little soft instead of not at all. When a pixel-level filter is on it also
+        // has to stay inside what a main-thread 3x3 pass can chew through.
+        const stNow = stateRef.current;
+        const pixelFiltersOn =
+          stNow.invertR || stNow.invertG || stNow.invertB || (stNow.sharpen || 0) > 0 || (stNow.denoise || 0) > 0;
+        const dpr = fitCanvasScale(
+          viewport.width,
+          viewport.height,
+          Math.min(window.devicePixelRatio || 1, 2),
+          pixelFiltersOn ? FILTERED_MAX_PIXELS : undefined
+        );
         const canvas = canvasRef.current;
         const ctx = canvas.getContext("2d");
         canvas.width = Math.floor(viewport.width * dpr);
@@ -1246,32 +1276,56 @@ export default function ManuscriptRuler() {
   };
 
   // ---------------- Thumbnails generation ----------------
-  const generateThumbs = async () => {
+  // Fills the strip one page at a time and shows each as it arrives. The old
+  // version rendered every page into an array before showing anything, which on a
+  // long manuscript meant a frozen window and — now that archive pages load on
+  // demand — pulled the entire archive into memory to build a strip the reader
+  // might glance at once. `thumbsRunRef` retires a run when the strip is closed or
+  // the document changes, so a half-finished pass stops instead of racing the next.
+  const thumbsRunRef = useRef(0);
+
+  const generateThumbs = useCallback(async () => {
     if (!doc) return;
-    const thumbs = [];
-    for (let i = 1; i <= pageCount; i++) {
-      const page = await doc.getPage(i);
-      const vp = page.getViewport({ scale: 1, rotation: 0 });
-      const targetW = 120;
-      const scale = targetW / vp.width;
-      const rvp = page.getViewport({ scale, rotation: 0 });
-      const off = document.createElement("canvas");
-      off.width = Math.floor(rvp.width);
-      off.height = Math.floor(rvp.height);
-      const ctx = off.getContext("2d");
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(0, 0, off.width, off.height);
-      await page.render({ canvasContext: ctx, viewport: rvp }).promise;
-      thumbs.push(off.toDataURL("image/jpeg", 0.6));
+    const run = ++thumbsRunRef.current;
+    const total = pageCount;
+    setThumbUrls(new Array(total).fill(null));
+    for (let i = 1; i <= total; i++) {
+      if (run !== thumbsRunRef.current) return;
+      try {
+        const page = await doc.getPage(i);
+        if (run !== thumbsRunRef.current) return;
+        const vp = page.getViewport({ scale: 1, rotation: 0 });
+        const targetW = 120;
+        const thumbScale = targetW / vp.width;
+        const rvp = page.getViewport({ scale: thumbScale, rotation: 0 });
+        const off = document.createElement("canvas");
+        off.width = Math.max(1, Math.floor(rvp.width));
+        off.height = Math.max(1, Math.floor(rvp.height));
+        const ctx = off.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, off.width, off.height);
+        await page.render({ canvasContext: ctx, viewport: rvp }).promise;
+        if (run !== thumbsRunRef.current) return;
+        const url = off.toDataURL("image/jpeg", 0.6);
+        setThumbUrls((prev) => {
+          if (prev.length !== total) return prev;
+          const next = prev.slice();
+          next[i - 1] = url;
+          return next;
+        });
+      } catch { /* skip a page that will not render rather than stopping the strip */ }
+      // hand the main thread back between pages so the viewer stays responsive
+      await new Promise((r) => setTimeout(r, 0));
     }
-    setThumbUrls(thumbs);
-  };
+  }, [doc, pageCount]);
 
   useEffect(() => {
-    if (showThumbs && doc && thumbUrls.length !== pageCount) {
+    if (showThumbs && doc) {
       generateThumbs();
+    } else {
+      thumbsRunRef.current += 1; // retire any pass still running
+      setThumbUrls([]);
     }
-    if (!showThumbs) setThumbUrls([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showThumbs, doc, pageCount]);
 
@@ -1651,8 +1705,14 @@ export default function ManuscriptRuler() {
         setSelectingRect(null);
         setActiveBubbleId(null);
         setActiveHeadingId(null);
-        setShowSettings(false);
+        setShowShortcuts(false);
         setOpenGroup(null);
+        return;
+      }
+      // "?" opens the shortcut list — the panel existed but nothing opened it.
+      if (e.key === "?" || (e.key === "/" && e.shiftKey) || e.key === "؟") {
+        e.preventDefault();
+        setShowShortcuts((v) => !v);
         return;
       }
       // Space toggles ruler auto-scroll
@@ -1916,11 +1976,6 @@ export default function ManuscriptRuler() {
                   onChange={(e) => setState((s) => ({ ...s, contrast: Number(e.target.value) }))} data-testid="mr-set-contrast" />
               </div>
               <div className="mr-field">
-                <label>الإشباع <span className="val">{state.saturate}%</span></label>
-                <input type="range" min="0" max="300" value={state.saturate}
-                  onChange={(e) => setState((s) => ({ ...s, saturate: Number(e.target.value) }))} data-testid="mr-set-saturate" />
-              </div>
-              <div className="mr-field">
                 <label>الحدة (Sharpen) <span className="val">{state.sharpen}%</span></label>
                 <input type="range" min="0" max="100" value={state.sharpen}
                   onChange={(e) => setState((s) => ({ ...s, sharpen: Number(e.target.value) }))} data-testid="mr-set-sharpen" />
@@ -1930,15 +1985,40 @@ export default function ManuscriptRuler() {
                 <input type="range" min="0" max="100" value={state.denoise}
                   onChange={(e) => setState((s) => ({ ...s, denoise: Number(e.target.value) }))} data-testid="mr-set-denoise" />
               </div>
-              <div className="mr-pop-title">عكس الألوان:</div>
               <div className="mr-pop-row">
-                <button className={`mr-btn ${state.invert ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invert: !s.invert }))} data-testid="mr-set-invert">
+                <button className={`mr-btn ${state.invert ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invert: !s.invert }))} data-testid="mr-set-invert" style={{ flex: 1, justifyContent: "center" }}>
                   <SunMedium size={12} /> نيجاتيف كامل
                 </button>
-                <button className={`mr-btn ${state.invertR ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertR: !s.invertR }))} data-testid="mr-set-invert-r" style={{color: state.invertR ? "#ff6b6b" : undefined}}>R</button>
-                <button className={`mr-btn ${state.invertG ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertG: !s.invertG }))} data-testid="mr-set-invert-g" style={{color: state.invertG ? "#5cff8f" : undefined}}>G</button>
-                <button className={`mr-btn ${state.invertB ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertB: !s.invertB }))} data-testid="mr-set-invert-b" style={{color: state.invertB ? "#6ba8ff" : undefined}}>B</button>
+                <button className="mr-btn" onClick={resetImage} data-testid="mr-btn-reset-image" title="إعادة إعدادات الصورة إلى الافتراضي">
+                  <RotateCcw size={13} /> استعادة الافتراضي
+                </button>
               </div>
+
+              {/* The rest are for occasional use; folded away so the common four stay
+                  at the top of the panel instead of being buried. */}
+              <button
+                className="mr-btn"
+                onClick={() => setShowAdvancedImage((v) => !v)}
+                data-testid="mr-btn-advanced-image"
+                style={{ width: "100%", justifyContent: "center", marginTop: 6 }}
+              >
+                <Sliders size={13} /> خيارات متقدمة {showAdvancedImage ? "▴" : "▾"}
+              </button>
+              {showAdvancedImage && (
+                <>
+                  <div className="mr-field">
+                    <label>الإشباع <span className="val">{state.saturate}%</span></label>
+                    <input type="range" min="0" max="300" value={state.saturate}
+                      onChange={(e) => setState((s) => ({ ...s, saturate: Number(e.target.value) }))} data-testid="mr-set-saturate" />
+                  </div>
+                  <div className="mr-pop-title">عكس قناة لونية بمفردها:</div>
+                  <div className="mr-pop-row">
+                    <button className={`mr-btn ${state.invertR ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertR: !s.invertR }))} data-testid="mr-set-invert-r" style={{color: state.invertR ? "#ff6b6b" : undefined}}>R</button>
+                    <button className={`mr-btn ${state.invertG ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertG: !s.invertG }))} data-testid="mr-set-invert-g" style={{color: state.invertG ? "#5cff8f" : undefined}}>G</button>
+                    <button className={`mr-btn ${state.invertB ? "mr-btn-active" : ""}`} onClick={() => setState((s) => ({ ...s, invertB: !s.invertB }))} data-testid="mr-set-invert-b" style={{color: state.invertB ? "#6ba8ff" : undefined}}>B</button>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1982,10 +2062,12 @@ export default function ManuscriptRuler() {
               <button className="mr-pop-x" onClick={() => setOpenGroup(null)} title="إغلاق"><X size={14} /></button>
               <div className="mr-pop-title">شكل المسطرة:</div>
               <div className="mr-pop-row">
+                {/* "متوازي" used to sit here. Its only style rule set transform-origin,
+                    which the element already carries inline, so it rendered exactly like
+                    "شريط" — two buttons, one result. Tilt comes from the slider below. */}
                 {[
                   { v: "band", lbl: "شريط" },
                   { v: "line", lbl: "خط" },
-                  { v: "parallelogram", lbl: "متوازي" },
                 ].map((sh) => (
                   <button key={sh.v}
                     className={`mr-btn ${state.rulerShape === sh.v ? "mr-btn-active" : ""}`}
@@ -2040,6 +2122,13 @@ export default function ManuscriptRuler() {
                 <input type="range" min="0" max="80" value={Math.round(state.dimAlpha * 100)}
                   onChange={(e) => setState((s) => ({ ...s, dimAlpha: Number(e.target.value) / 100, dimEnabled: Number(e.target.value) > 0 }))} data-testid="mr-set-dim" />
               </div>
+              {/* Moved here from a settings dialog that nothing ever opened, which
+                  left the arrow-key step impossible to change. */}
+              <div className="mr-field">
+                <label>قفزة السطر (سهم لأعلى/أسفل) <span className="val">{state.rulerStep}px</span></label>
+                <input type="range" min="4" max="120" value={state.rulerStep}
+                  onChange={(e) => setState((s) => ({ ...s, rulerStep: Number(e.target.value) }))} data-testid="mr-set-step" />
+              </div>
               <div className="mr-pop-title">التمرير التلقائي:</div>
               <div className="mr-field">
                 <label>السرعة <span className="val">{state.rulerAutoSpeed} px/ث</span></label>
@@ -2057,6 +2146,9 @@ export default function ManuscriptRuler() {
                   })}
                   data-testid="mr-btn-auto-toggle">
                   {state.rulerAutoPlaying ? <><Pause size={14} /> إيقاف</> : <><Play size={14} /> تشغيل</>}
+                </button>
+                <button className="mr-btn" onClick={resetRuler} data-testid="mr-btn-reset-ruler" title="إعادة إعدادات المسطرة إلى الافتراضي">
+                  <RotateCcw size={13} /> استعادة الافتراضي
                 </button>
               </div>
             </div>
@@ -2121,14 +2213,13 @@ export default function ManuscriptRuler() {
           {openGroup === "export" && (
             <div className="mr-popover" data-testid="mr-pop-export">
               <button className="mr-pop-x" onClick={() => setOpenGroup(null)} title="إغلاق"><X size={14} /></button>
-              <button className="mr-pop-item" onClick={() => { setState((s) => ({ ...s, exportFormat: "zip" })); setShowExport(true); setOpenGroup(null); }} data-testid="mr-exp-zip">
-                <Archive size={13} /> صور مضغوطة في ملف ZIP
+              {/* One entry for the compressed export: the dialog it opens already asks
+                  for ZIP or PDF, so two menu items were asking the same question twice. */}
+              <button className="mr-pop-item" onClick={() => { setShowExport(true); setOpenGroup(null); }} data-testid="mr-exp-compressed">
+                <Archive size={13} /> تصدير مضغوط (صور ZIP أو PDF)
               </button>
               <button className="mr-pop-item" onClick={() => { exportAsIndexedPdf(); setOpenGroup(null); }} data-testid="mr-exp-pdf-indexed">
                 <FileText size={13} /> PDF مفهرس بالعناوين والتعليقات
-              </button>
-              <button className="mr-pop-item" onClick={() => { setState((s) => ({ ...s, exportFormat: "pdf" })); setShowExport(true); setOpenGroup(null); }} data-testid="mr-exp-pdf-comp">
-                <FileText size={13} /> PDF مضغوط (تصغير الحجم)
               </button>
               <div className="mr-pop-sep" />
               <button className="mr-pop-item" onClick={() => { exportCommentsAsWord(); setOpenGroup(null); }} data-testid="mr-exp-word-comments">
@@ -2137,10 +2228,7 @@ export default function ManuscriptRuler() {
               <button className="mr-pop-item" onClick={() => { exportHeadingsAsWord(); setOpenGroup(null); }} data-testid="mr-exp-word-headings">
                 <FileText size={13} /> تصدير العناوين إلى Word
               </button>
-              <div className="mr-pop-sep" />
-              <button className="mr-pop-item" onClick={() => { beginSnip(); setOpenGroup(null); }} data-testid="mr-exp-snip">
-                <Scissors size={13} /> التقاط لقطة مع شرح
-              </button>
+              {/* "التقاط لقطة" lived here too, duplicating the لقطة button in the toolbar. */}
             </div>
           )}
         </div>
@@ -2166,6 +2254,25 @@ export default function ManuscriptRuler() {
           data-testid="mr-btn-fullscreen"
         >
           {isFs ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+        </button>
+
+        <button
+          className={`mr-btn mr-btn-icon ${showThumbs ? "mr-btn-active" : ""}`}
+          onClick={() => hasFile && setShowThumbs((v) => !v)}
+          disabled={!hasFile}
+          title="شريط الصفحات المصغّرة"
+          data-testid="mr-btn-thumbs"
+        >
+          <LayoutGrid size={18} />
+        </button>
+
+        <button
+          className="mr-btn mr-btn-icon"
+          onClick={() => setShowShortcuts(true)}
+          title="اختصارات لوحة المفاتيح (؟)"
+          data-testid="mr-btn-shortcuts"
+        >
+          <Keyboard size={18} />
         </button>
 
         <button
@@ -2455,142 +2562,9 @@ export default function ManuscriptRuler() {
           </div>
         )}
 
-        {showSettings && (
-          <div className="mr-settings mr-fade" data-testid="mr-settings">
-            <h3>إعدادات المسطرة</h3>
-
-            <div className="mr-field">
-              <label>
-                ارتفاع المسطرة (السطر) <span className="val">{state.rulerHeight}px</span>
-              </label>
-              <input
-                type="range"
-                min="8"
-                max="120"
-                value={state.rulerHeight}
-                onChange={(e) =>
-                  setState((s) => ({ ...s, rulerHeight: Number(e.target.value) }))
-                }
-                data-testid="mr-set-height"
-              />
-            </div>
-
-            <div className="mr-field">
-              <label>
-                قفزة السطر (سهم لأسفل/أعلى) <span className="val">{state.rulerStep}px</span>
-              </label>
-              <input
-                type="range"
-                min="4"
-                max="120"
-                value={state.rulerStep}
-                onChange={(e) =>
-                  setState((s) => ({ ...s, rulerStep: Number(e.target.value) }))
-                }
-                data-testid="mr-set-step"
-              />
-            </div>
-
-            <div className="mr-field">
-              <label>
-                لون المسطرة <span className="val">{state.rulerColor}</span>
-              </label>
-              <input
-                type="color"
-                value={state.rulerColor}
-                onChange={(e) => setState((s) => ({ ...s, rulerColor: e.target.value }))}
-                data-testid="mr-set-color"
-              />
-            </div>
-
-            <div className="mr-field">
-              <label>
-                شفافية المسطرة <span className="val">{Math.round(state.rulerOpacity * 100)}%</span>
-              </label>
-              <input
-                type="range"
-                min="10"
-                max="90"
-                value={Math.round(state.rulerOpacity * 100)}
-                onChange={(e) =>
-                  setState((s) => ({ ...s, rulerOpacity: Number(e.target.value) / 100 }))
-                }
-                data-testid="mr-set-opacity"
-              />
-            </div>
-
-            <div className="mr-field">
-              <label>
-                تعتيم ما حول السطر <span className="val">{Math.round(state.dimAlpha * 100)}%</span>
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="80"
-                value={Math.round(state.dimAlpha * 100)}
-                onChange={(e) =>
-                  setState((s) => ({
-                    ...s,
-                    dimAlpha: Number(e.target.value) / 100,
-                    dimEnabled: Number(e.target.value) > 0,
-                  }))
-                }
-                data-testid="mr-set-dim"
-              />
-            </div>
-
-            <div className="mr-field">
-              <label>
-                السطوع <span className="val">{state.brightness}%</span>
-              </label>
-              <input
-                type="range"
-                min="50"
-                max="200"
-                value={state.brightness}
-                onChange={(e) => setState((s) => ({ ...s, brightness: Number(e.target.value) }))}
-                data-testid="mr-set-brightness"
-              />
-            </div>
-
-            <div className="mr-field">
-              <label>
-                التباين <span className="val">{state.contrast}%</span>
-              </label>
-              <input
-                type="range"
-                min="50"
-                max="250"
-                value={state.contrast}
-                onChange={(e) => setState((s) => ({ ...s, contrast: Number(e.target.value) }))}
-                data-testid="mr-set-contrast"
-              />
-            </div>
-
-            <div className="mr-field">
-              <label style={{ cursor: "pointer" }}>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <SunMedium size={14} /> عكس الألوان (للمخطوطات الباهتة)
-                </span>
-                <input
-                  type="checkbox"
-                  checked={state.invert}
-                  onChange={(e) => setState((s) => ({ ...s, invert: e.target.checked }))}
-                  data-testid="mr-set-invert"
-                  style={{ accentColor: "var(--amber)" }}
-                />
-              </label>
-            </div>
-
-            <button
-              className="mr-btn"
-              onClick={() => setState((s) => ({ ...s, ...pickRulerDefaults() }))}
-              data-testid="mr-set-reset"
-            >
-              إعادة الافتراضي
-            </button>
-          </div>
-        )}
+        {/* A ruler-settings dialog stood here. Nothing in the app ever called
+            setShowSettings(true), so it could not be opened; its one unique control,
+            the arrow-key line step, now lives in the ruler panel. */}
 
         {showBookmarks && (
           <div className="mr-settings mr-fade" data-testid="mr-bookmarks" style={{ inset: "auto 10px 10px auto", top: 60 }}>
@@ -3222,7 +3196,10 @@ export default function ManuscriptRuler() {
               const hasHeading = currentHeadings.some((h) => h.page === pg);
               return (
                 <div key={i} className={`mr-thumb ${isActive ? "active" : ""}`} onClick={() => setState((s) => ({ ...s, page: pg, rulerY: 0 }))} data-testid="mr-thumb">
-                  <img src={url} alt={`page ${pg}`} />
+                  {/* The strip fills in page by page, so a slot may not be rendered yet. */}
+                  {url
+                    ? <img src={url} alt={`page ${pg}`} />
+                    : <div className="mr-thumb-pending" aria-hidden="true" />}
                   <div className="mr-thumb-label">
                     {state.folioMode ? formatFolio(pg, { startFolio: state.folioStart, offset: state.folioOffset }) : pg}
                   </div>

@@ -740,6 +740,20 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   overflow-y: hidden;
   flex-direction: row;
 }
+/* Slot for a page whose thumbnail has not been rendered yet — the strip fills in
+   progressively rather than blocking until every page is done. */
+.mr-thumb-pending {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--ink-3) 0 6px,
+    var(--ink-2) 6px 12px
+  );
+  border-radius: 3px;
+  opacity: 0.5;
+}
+
 .mr-thumbs-horizontal .mr-thumb {
   min-width: 100px;
   height: 100%;

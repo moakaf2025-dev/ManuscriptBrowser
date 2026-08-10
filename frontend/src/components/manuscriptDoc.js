@@ -240,10 +240,18 @@ function createSplittingDoc(baseDoc, opts = {}) {
 const MAX_CANVAS_SIDE = 16384;
 const MAX_CANVAS_AREA = 268435456; // 2^28 px
 
-export function fitCanvasScale(width, height, desired = 1) {
+// maxPixels tightens the area budget beyond Chromium's own limit. The pixel-level
+// filters read the whole backing store into JS, run a 3x3 kernel over it and write
+// it back, all on the main thread; at full zoom that is a 190-megapixel canvas and
+// the UI stops responding for many seconds on every slider nudge. Rendering those
+// pages a little coarser while a filter is on keeps the control usable.
+export const FILTERED_MAX_PIXELS = 12e6;
+
+export function fitCanvasScale(width, height, desired = 1, maxPixels = MAX_CANVAS_AREA) {
   if (!(width > 0) || !(height > 0)) return desired;
+  const area = Math.min(MAX_CANVAS_AREA, maxPixels > 0 ? maxPixels : MAX_CANVAS_AREA);
   const bySide = MAX_CANVAS_SIDE / Math.max(width, height);
-  const byArea = Math.sqrt(MAX_CANVAS_AREA / (width * height));
+  const byArea = Math.sqrt(area / (width * height));
   return Math.max(0.05, Math.min(desired, bySide, byArea));
 }
 
