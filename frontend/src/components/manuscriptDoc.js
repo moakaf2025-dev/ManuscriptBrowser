@@ -154,19 +154,22 @@ function createSplittingDoc(baseDoc, opts = {}) {
               const effective = latest != null ? latest : foldRatio;
               const { rotation = 0, scale } = viewport;
               const bv = basePageObj.getViewport({ scale, rotation });
-              const off = document.createElement("canvas");
-              off.width = Math.floor(bv.width);
-              off.height = Math.floor(bv.height);
-              const offCtx = off.getContext("2d");
-              await basePageObj.render({ canvasContext: offCtx, viewport: bv }).promise;
               const foldPx = bv.width * effective;
-              if (isRight) {
-                const sw = bv.width - foldPx;
-                canvasContext.drawImage(off, foldPx, 0, sw, bv.height, 0, 0, sw, bv.height);
-              } else {
-                const sw = foldPx;
-                canvasContext.drawImage(off, 0, 0, sw, bv.height, 0, 0, sw, bv.height);
-              }
+              // Draw the base page straight onto the destination, shifted so that the
+              // half we want starts at x=0; the other half falls outside the canvas
+              // and is clipped for free.
+              //
+              // This used to render the whole page onto an offscreen canvas and copy
+              // half of it across. That asked for twice the pixels and, past roughly
+              // 400% zoom on a full-size scan, for more than Chromium will allocate —
+              // and an oversized canvas comes back blank rather than throwing, so the
+              // page simply vanished. Both the base render and the underlying image
+              // draw multiply into the current transform, so translating first is
+              // enough for pdf.js pages and image sequences alike.
+              canvasContext.save();
+              canvasContext.translate(isRight ? -foldPx : 0, 0);
+              await basePageObj.render({ canvasContext, viewport: bv }).promise;
+              canvasContext.restore();
             })(),
           };
         },
@@ -174,6 +177,21 @@ function createSplittingDoc(baseDoc, opts = {}) {
     },
     baseDoc,
   };
+}
+
+// ------------------- Canvas size limits -------------------
+// Chromium caps both the longest side and the total area of a canvas. Past either
+// limit it does not throw — it hands back a surface that stays blank, so the page
+// silently disappears. Scale the backing store down instead: a slightly soft page
+// at 1000% zoom beats no page at all.
+const MAX_CANVAS_SIDE = 16384;
+const MAX_CANVAS_AREA = 268435456; // 2^28 px
+
+export function fitCanvasScale(width, height, desired = 1) {
+  if (!(width > 0) || !(height > 0)) return desired;
+  const bySide = MAX_CANVAS_SIDE / Math.max(width, height);
+  const byArea = Math.sqrt(MAX_CANVAS_AREA / (width * height));
+  return Math.max(0.05, Math.min(desired, bySide, byArea));
 }
 
 // ------------------- Fold detection -------------------

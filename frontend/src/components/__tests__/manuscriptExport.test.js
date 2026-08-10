@@ -1,6 +1,14 @@
 import JSZip from "jszip";
-import * as docx from "docx";
+import docx from "docx";
 import { infoRows, buildHeadingsDocument, buildCommentsDocument } from "../manuscriptExport";
+
+// Guards the interop the app depends on: `docx` is aliased to its CommonJS build,
+// and only the default binding carries the library's exports. A named or namespace
+// import compiles fine and then reads undefined in the browser.
+it("exposes the docx API through the default binding", () => {
+  expect(typeof docx.Packer).toBe("function");
+  expect(docx.BorderStyle && docx.BorderStyle.SINGLE).toBeTruthy();
+});
 
 // Pull the main document part out of the .docx so assertions run against the OOXML
 // Word will actually read, not against our own builder objects.

@@ -51,7 +51,7 @@ import {
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
-import { buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf } from "./manuscriptDoc";
+import { buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf, fitCanvasScale } from "./manuscriptDoc";
 import { buildHeadingsDocument, buildCommentsDocument, toDocxBlob } from "./manuscriptExport";
 import { PDFDocument } from "pdf-lib";
 
@@ -557,9 +557,12 @@ export default function ManuscriptRuler() {
       try {
         const page = await doc.getPage(pageNum);
         if (isStale()) return;
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
         const renderScale = 1.5 * scale;
         const viewport = page.getViewport({ scale: renderScale, rotation: state.rotation });
+        // Keep the backing store inside what Chromium will actually allocate; at the
+        // top zoom levels on a full-size scan this drops below 1 and the page renders
+        // a little soft instead of not at all.
+        const dpr = fitCanvasScale(viewport.width, viewport.height, Math.min(window.devicePixelRatio || 1, 2));
         const canvas = canvasRef.current;
         const ctx = canvas.getContext("2d");
         canvas.width = Math.floor(viewport.width * dpr);

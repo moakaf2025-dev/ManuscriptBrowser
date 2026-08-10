@@ -1,4 +1,4 @@
-import { formatFolio, toggleSplitDoc } from "../manuscriptDoc";
+import { formatFolio, toggleSplitDoc, fitCanvasScale } from "../manuscriptDoc";
 
 describe("formatFolio", () => {
   it("numbers two viewer pages to one folio, recto then verso", () => {
@@ -74,5 +74,41 @@ describe("split-page numbering", () => {
     const split = toggleSplitDoc(baseDoc(4), true, { from: 2, to: 999 });
     expect(split._range).toEqual({ from: 2, to: 4 });
     expect(split.numPages).toBe(7); // 4 + 3 split pages
+  });
+});
+
+describe("fitCanvasScale", () => {
+  it("leaves ordinary pages at the scale they asked for", () => {
+    expect(fitCanvasScale(1200, 1600, 2)).toBe(2);
+    expect(fitCanvasScale(1200, 1600, 1)).toBe(1);
+  });
+
+  it("caps the longest side at what Chromium will allocate", () => {
+    // 9000px wide at dpr 2 would be 18000px, past the 16384 limit.
+    const s = fitCanvasScale(9000, 1000, 2);
+    expect(9000 * s).toBeLessThanOrEqual(16384);
+  });
+
+  it("keeps every result inside both limits at once", () => {
+    const sizes = [
+      [800, 1200], [4200, 5800], [9000, 1000], [1000, 20000],
+      [16000, 16000], [30000, 900], [50000, 50000],
+    ];
+    for (const [w, h] of sizes) {
+      for (const desired of [0.5, 1, 2]) {
+        const s = fitCanvasScale(w, h, desired);
+        expect(s).toBeLessThanOrEqual(desired);
+        expect(Math.max(w * s, h * s)).toBeLessThanOrEqual(16384 + 1e-6);
+        expect(w * s * h * s).toBeLessThanOrEqual(268435456 + 1);
+      }
+    }
+  });
+
+  it("never scales all the way to nothing", () => {
+    expect(fitCanvasScale(1e6, 1e6, 2)).toBeGreaterThan(0);
+  });
+
+  it("passes through degenerate sizes rather than dividing by zero", () => {
+    expect(fitCanvasScale(0, 0, 1.5)).toBe(1.5);
   });
 });

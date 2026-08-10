@@ -89,6 +89,25 @@ let webpackConfig = {
       docx: path.resolve(__dirname, 'node_modules/docx/dist/index.cjs'),
     },
     configure: (webpackConfig) => {
+      // CRA's catch-all asset rule claims every extension it does not recognise,
+      // and .cjs is not on its list. Left alone it copies docx's CommonJS bundle
+      // into static/media and resolves the import to a URL string, so every
+      // binding reads undefined at runtime while the build still succeeds. Teach
+      // that rule to leave .cjs to the JavaScript pipeline.
+      const oneOfContainer = webpackConfig.module.rules.find((r) => Array.isArray(r.oneOf));
+      const assetFallback = oneOfContainer?.oneOf?.find(
+        (r) => Array.isArray(r.exclude) && r.exclude.some((x) => String(x).includes("js|mjs|jsx|ts|tsx"))
+      );
+      if (!assetFallback) {
+        throw new Error("craco: could not find CRA's asset fallback rule to exempt .cjs from it");
+      }
+      assetFallback.exclude.push(/\.cjs$/);
+
+      // That bundle is already self-contained - no external requires, no ESM
+      // syntax - but it embeds a browserify-style loader whose two-argument
+      // require() webpack refuses to analyse. Nothing in it needs resolving, so
+      // skip parsing it and let the CommonJS wrapper hand over module.exports.
+      webpackConfig.module.noParse = /[\\/]node_modules[\\/]docx[\\/]dist[\\/]index\.cjs$/;
 
       // Add ignored patterns to reduce watched directories
         webpackConfig.watchOptions = {

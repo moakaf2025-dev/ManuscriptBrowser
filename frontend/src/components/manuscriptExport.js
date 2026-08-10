@@ -9,9 +9,12 @@
 // Every paragraph is marked bidirectional and every run right-to-left, and tables
 // carry visuallyRightToLeft, so column order and text direction survive in Word
 // regardless of the reader's UI language.
-// Namespace import, not named: craco aliases `docx` to its CommonJS build (see
-// craco.config.js), and webpack will not hand out named bindings from a CJS module.
-import * as docx from "docx";
+// Default import, not named or namespace: craco aliases `docx` to its CommonJS
+// build (see craco.config.js). Webpack hands a CJS module's exports object over as
+// the default binding, but does not synthesise named bindings from it — `import
+// { BorderStyle }` compiles and then reads undefined at runtime. Keep this default
+// import in step with that alias; against the ESM build it would be undefined.
+import docx from "docx";
 
 const {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
