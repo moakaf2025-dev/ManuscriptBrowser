@@ -354,6 +354,9 @@ export default function ManuscriptRuler() {
   const openAddCommentRef = useRef(() => {});
   const openAddHeadingRef = useRef(() => {});
   const snipRef = useRef(() => {});
+  const rotateRef = useRef(() => {});
+  const toggleRulerRef = useRef(() => {});
+  const toggleFullscreenRef = useRef(() => {});
   const renderPageRef = useRef(() => {});
   // In-flight page render (pdf.js RenderTask) + a monotonic tag used to drop
   // continuations of renders that a newer one has superseded.
@@ -1409,27 +1412,67 @@ export default function ManuscriptRuler() {
         pageRefs.push(pdfPage.ref);
       }
 
-      // Build outline (bookmarks) from headings
+      const context = pdfDoc.context;
       const headings = [...currentHeadings].sort((a, b) => a.page - b.page);
-      if (headings.length > 0) {
-        const context = pdfDoc.context;
+      const comments = [...currentComments].sort((a, b) => a.page - b.page || (a.y || 0) - (b.y || 0));
+
+      // Comments as real PDF annotations, so any reader shows them on the page.
+      // The menu has always called this export "بالعناوين والتعليقات", but only
+      // headings were ever written into it.
+      for (const c of comments) {
+        const pageIdx = Math.max(0, Math.min(pageCount - 1, c.page - 1));
+        const pdfPage = pdfDoc.getPage(pageIdx);
+        const { width, height } = pdfPage.getSize();
+        // Comment coordinates are fractions of the page, measured from the top;
+        // PDF measures from the bottom.
+        const fx = c.rect ? c.rect.x + (c.rect.w || 0) : (c.x != null ? c.x : 0.5);
+        const fy = c.rect ? c.rect.y : (c.y != null ? c.y : 0.5);
+        const x = Math.max(0, Math.min(width - 24, fx * width));
+        const y = Math.max(0, Math.min(height - 24, height - fy * height - 24));
+        const annot = context.obj({
+          Type: "Annot",
+          Subtype: "Text",
+          Name: "Comment",
+          Rect: [x, y, x + 24, y + 24],
+          Contents: PDFHexString.fromText(c.text || ""),
+          T: PDFHexString.fromText(c.folio || formatFolio(c.page, { startFolio: state.folioStart, offset: state.folioOffset })),
+          F: 4, // print this annotation
+          C: [0.95, 0.76, 0.31],
+        });
+        const existing = pdfPage.node.get(PDFName.of("Annots"));
+        if (existing) existing.push(context.register(annot));
+        else pdfPage.node.set(PDFName.of("Annots"), context.obj([context.register(annot)]));
+      }
+
+      // Outline (bookmarks): headings and comments together, in page order, so the
+      // sidebar is a usable index of everything recorded on the manuscript.
+      const outlineEntries = [
+        ...headings.map((h) => ({ page: h.page, y: 0, title: h.title })),
+        ...comments.map((c) => ({
+          page: c.page,
+          y: c.y || 0,
+          title: `💬 ${(c.text || "").replace(/\s+/g, " ").slice(0, 60)}`,
+        })),
+      ].sort((a, b) => a.page - b.page || a.y - b.y);
+
+      if (outlineEntries.length > 0) {
         const outlineDict = context.obj({ Type: "Outlines" });
         const outlineRef = context.register(outlineDict);
-        const itemRefs = headings.map(() => context.nextRef());
-        headings.forEach((h, i) => {
-          const pageIdx = Math.max(0, Math.min(pageCount - 1, h.page - 1));
+        const itemRefs = outlineEntries.map(() => context.nextRef());
+        outlineEntries.forEach((entry, i) => {
+          const pageIdx = Math.max(0, Math.min(pageCount - 1, entry.page - 1));
           const item = context.obj({
-            Title: PDFHexString.fromText(h.title),
+            Title: PDFHexString.fromText(entry.title),
             Parent: outlineRef,
             Dest: [pageRefs[pageIdx], "Fit"],
           });
           if (i > 0) item.set(PDFName.of("Prev"), itemRefs[i - 1]);
-          if (i < headings.length - 1) item.set(PDFName.of("Next"), itemRefs[i + 1]);
+          if (i < outlineEntries.length - 1) item.set(PDFName.of("Next"), itemRefs[i + 1]);
           context.assign(itemRefs[i], item);
         });
         outlineDict.set(PDFName.of("First"), itemRefs[0]);
         outlineDict.set(PDFName.of("Last"), itemRefs[itemRefs.length - 1]);
-        outlineDict.set(PDFName.of("Count"), context.obj(headings.length));
+        outlineDict.set(PDFName.of("Count"), context.obj(outlineEntries.length));
         pdfDoc.catalog.set(PDFName.of("Outlines"), outlineRef);
         pdfDoc.catalog.set(PDFName.of("PageMode"), PDFName.of("UseOutlines"));
       }
@@ -1443,7 +1486,7 @@ export default function ManuscriptRuler() {
       a.download = `${base}-مفهرس.pdf`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-      showToast(`تم تصدير PDF مفهرس (${headings.length} علامة)`);
+      showToast(`تم تصدير PDF مفهرس (${headings.length} عنواناً و${comments.length} تعليقاً)`);
     } catch (e) {
       console.error(e);
       showToast("تعذّر التصدير: " + (e.message || e));
@@ -1725,6 +1768,48 @@ export default function ManuscriptRuler() {
         });
         return;
       }
+      // The shortcut list advertised seventeen keys; only six were ever bound, and
+      // two button tooltips promised H and F11 as well. The rest are wired here,
+      // through the same refs the toolbar buttons already use.
+      if (e.ctrlKey || e.metaKey) {
+        const k = e.key.toLowerCase();
+        const ctrlActions = {
+          o: () => fileInputRef.current?.click(),
+          "=": () => zoomInRef.current(),
+          "+": () => zoomInRef.current(),
+          "-": () => zoomOutRef.current(),
+          _: () => zoomOutRef.current(),
+          f: () => hasFileRef.current && openAddCommentRef.current(),
+          b: () => hasFileRef.current && openAddHeadingRef.current(),
+          s: () => hasFileRef.current && snipRef.current(),
+          g: () => hasFileRef.current && setShowBookmarks((v) => !v),
+        };
+        if (ctrlActions[k]) {
+          e.preventDefault();
+          ctrlActions[k]();
+          return;
+        }
+        return; // leave other Ctrl combinations to the browser
+      }
+
+      if (e.key === "F11") {
+        e.preventDefault();
+        toggleFullscreenRef.current();
+        return;
+      }
+      // Plain letters, matched case-insensitively so Caps Lock does not break them.
+      const plain = e.key.toLowerCase();
+      if (plain === "r" && hasFileRef.current) {
+        e.preventDefault();
+        rotateRef.current();
+        return;
+      }
+      if (plain === "h" && hasFileRef.current) {
+        e.preventDefault();
+        toggleRulerRef.current();
+        return;
+      }
+
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
@@ -1828,6 +1913,14 @@ export default function ManuscriptRuler() {
     snipRef.current = beginSnip;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.fileKey, state.page, state.rulerY, state.rulerStep, state.folioMode, state.folioStart, state.folioOffset, doc]);
+
+  // Kept fresh for the keyboard handler, which is subscribed once.
+  useEffect(() => {
+    rotateRef.current = rotate;
+    toggleRulerRef.current = toggleRuler;
+    toggleFullscreenRef.current = toggleFullscreen;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  });
 
   return (
     <div className={`mr-app ${isFs ? "mr-hide-chrome" : ""}`} data-testid="mr-app">
