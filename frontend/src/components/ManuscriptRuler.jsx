@@ -56,6 +56,8 @@ import {
   FILTERED_MAX_PIXELS, createOrderedDoc, defaultPageOrder, movePage,
 } from "./manuscriptDoc";
 import { buildHeadingsDocument, buildCommentsDocument, toDocxBlob } from "./manuscriptExport";
+import { DEFAULT_RECIPE, RECIPE_PRESETS } from "./imageEnhance";
+import { enhancePixels } from "./enhanceClient";
 import {
   BookmarkModal, InfoEditorModal, HeadingModal, CommentModal,
   SnipOverlay, SnipPreview, AboutModal, SHORTCUTS,
@@ -128,6 +130,9 @@ const DEFAULT_STATE = {
   exportMaxSize: 4000,
   exportQuality: 95,
   exportFormat: "zip",
+  // The legibility recipe. Tuned on one page and then in force for the whole
+  // manuscript, since it is applied as each page renders.
+  enhance: { ...DEFAULT_RECIPE },
 };
 
 function loadState() {
@@ -194,6 +199,7 @@ const PER_FILE_KEYS = [
   "zoomIdx", "rotation",
   "rulerHeight", "rulerWidth", "rulerAlign", "rulerColor", "rulerOpacity", "rulerShape", "rulerTilt", "dimAlpha", "dimEnabled",
   "folioMode", "folioStart", "folioOffset",
+  "enhance",
 ];
 
 const EMPTY_INFO = {
@@ -454,6 +460,10 @@ export default function ManuscriptRuler() {
     });
     showToast(message);
   };
+  // Patch the recipe, keeping the rest of it.
+  const setEnhance = (patch) =>
+    setState((s) => ({ ...s, enhance: { ...DEFAULT_RECIPE, ...(s.enhance || {}), ...patch } }));
+
   const resetImage = () =>
     resetGroup(
       ["brightness", "contrast", "saturate", "sharpen", "denoise", "invert", "invertR", "invertG", "invertB"],
@@ -659,6 +669,20 @@ export default function ManuscriptRuler() {
             ctx.putImageData(imgData, 0, 0);
           }
         } catch (err) { /* ignore filter errors */ }
+
+        // The legibility recipe runs in a worker, so a full-resolution page can be
+        // processed without the window locking up the way the inline filters do.
+        try {
+          const recipe = stateRef.current.enhance;
+          if (recipe && recipe.enabled) {
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const out = await enhancePixels(imgData, recipe);
+            if (isStale()) return;
+            imgData.data.set(out);
+            ctx.putImageData(imgData, 0, 0);
+          }
+        } catch (err) { /* a failed enhancement leaves the plain page on screen */ }
+
         setPageSize({ w: viewport.width, h: viewport.height });
       } catch (e) {
         // A cancelled render is the expected outcome of fast paging/zooming.
@@ -681,7 +705,7 @@ export default function ManuscriptRuler() {
     if (doc) renderPage(state.page);
     else setLoading(false);
     renderPageRef.current = renderPage;
-  }, [doc, state.page, state.rotation, state.zoomIdx, state.invertR, state.invertG, state.invertB, state.sharpen, state.denoise, renderPage]);
+  }, [doc, state.page, state.rotation, state.zoomIdx, state.invertR, state.invertG, state.invertB, state.sharpen, state.denoise, state.enhance, renderPage]);
 
   // Thumbs strip drag-resize
   useEffect(() => {
@@ -2147,6 +2171,53 @@ export default function ManuscriptRuler() {
                   <RotateCcw size={13} /> استعادة الافتراضي
                 </button>
               </div>
+
+              {/* Legibility recipe: a fixed sequence, tuned on the page in front of
+                  you and then in force for the whole manuscript. */}
+              <div className="mr-pop-title">توضيح المخطوط:</div>
+              <div className="mr-pop-row">
+                <button
+                  className={`mr-btn ${state.enhance?.enabled ? "mr-btn-active" : ""}`}
+                  onClick={() => setEnhance({ enabled: !state.enhance?.enabled })}
+                  data-testid="mr-enh-toggle"
+                  style={{ flex: 1, justifyContent: "center" }}
+                >
+                  <Sliders size={13} /> {state.enhance?.enabled ? "التوضيح مفعّل" : "تفعيل التوضيح"}
+                </button>
+                <button className="mr-btn" onClick={() => setEnhance({ ...DEFAULT_RECIPE, enabled: state.enhance?.enabled })} data-testid="mr-enh-reset" title="إعادة الوصفة إلى الافتراضي">
+                  <RotateCcw size={13} />
+                </button>
+              </div>
+
+              {state.enhance?.enabled && (
+                <>
+                  <div className="mr-pop-row" style={{ flexWrap: "wrap", gap: 4 }}>
+                    {RECIPE_PRESETS.map((p) => (
+                      <button key={p.name} className="mr-btn" style={{ fontSize: 11 }}
+                        onClick={() => setEnhance(p.recipe)} data-testid={`mr-enh-preset-${p.name}`}>
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                  {[
+                    ["flatten", "تسوية الإضاءة", "يعالج ظل التجليد وتفاوت الإنارة"],
+                    ["paper", "إزالة اصفرار الورق", "يحيّد لون الورق بمرجع من الصفحة نفسها"],
+                    ["contrast", "تمديد التباين", "يوسّع المدى بين الحبر والورق"],
+                    ["sharpen", "الحدّة", "بعد ما سبق، حتى لا تتضخّم الضجّة"],
+                    ["threshold", "فصل الحبر (عتبة)", "للمخطوط شديد الشحوب — للقراءة لا للتوثيق"],
+                  ].map(([k, label, hint]) => (
+                    <div className="mr-field" key={k}>
+                      <label title={hint}>{label} <span className="val">{state.enhance?.[k] ?? 0}%</span></label>
+                      <input type="range" min="0" max="100" value={state.enhance?.[k] ?? 0}
+                        onChange={(e) => setEnhance({ [k]: Number(e.target.value) })}
+                        data-testid={`mr-enh-${k}`} />
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.7, marginTop: 4 }}>
+                    اضبط الوصفة على هذه الورقة — تُطبَّق على المخطوط كله تلقائياً، وتُحفظ معه.
+                  </div>
+                </>
+              )}
 
               {/* The rest are for occasional use; folded away so the common four stay
                   at the top of the panel instead of being buried. */}
