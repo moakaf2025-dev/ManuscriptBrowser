@@ -66,6 +66,26 @@ export default function SplitView() {
 
   if (isChild) return <ManuscriptRuler />;
 
+  return <SplitShell panes={panes} setPanes={setPanes} sizes={sizes} beginDrag={beginDrag} containerRef={containerRef} />;
+}
+
+function SplitShell({ panes, setPanes, sizes, beginDrag, containerRef }) {
+  const frameARef = React.useRef(null);
+
+  // Keyboard shortcuts live in the pane, and a pane is an iframe, so the pane has
+  // to hold focus for a key press to reach it. On load focus sits on this outer
+  // document instead, which meant no shortcut worked until the reader happened to
+  // click on the page — and the same after every alt-tab back into the window.
+  React.useEffect(() => {
+    const focusPane = () => {
+      try { frameARef.current?.contentWindow?.focus(); } catch { /* cross-origin, cannot happen here */ }
+    };
+    focusPane();
+    const t = setTimeout(focusPane, 500); // again once the pane document is up
+    window.addEventListener("focus", focusPane);
+    return () => { clearTimeout(t); window.removeEventListener("focus", focusPane); };
+  }, []);
+
   // Compute iframe URLs. Use base + `#ns=A|B` so each pane gets its own localStorage.
   const baseHref = (() => {
     try {
@@ -106,9 +126,11 @@ export default function SplitView() {
         <div className="sv-pane" style={{ flex: `0 0 ${panes === 1 ? 100 : sizes[0]}%` }} data-testid="sv-pane-A">
           <iframe
             key="pane-A"
+            ref={frameARef}
             title="مخطوط A"
             src={`${baseHref}#ns=A`}
             className="sv-frame"
+            onLoad={() => { try { frameARef.current?.contentWindow?.focus(); } catch { /* noop */ } }}
             allow="clipboard-write; clipboard-read; fullscreen *"
           />
         </div>
