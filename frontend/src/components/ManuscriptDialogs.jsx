@@ -5,7 +5,11 @@
 //
 // Split out of ManuscriptRuler.jsx, which had grown to over 4000 lines.
 import React from "react";
-import { X, Save, RotateCcw, Copy, Download } from "lucide-react";
+// Square, ArrowUpRight and Pencil are handed to toolBtn as values rather than
+// written as JSX tags, so they are easy to miss when scanning for `<Icon`.
+// Do not import lucide's `Image` here — SnipPreview calls `new Image()` and the
+// icon of that name would shadow the DOM constructor.
+import { X, Save, RotateCcw, Copy, Download, Square, ArrowUpRight, Pencil } from "lucide-react";
 
 export function BookmarkModal({ initialLabel, onConfirm, onCancel }) {
   const [label, setLabel] = React.useState(initialLabel || "");

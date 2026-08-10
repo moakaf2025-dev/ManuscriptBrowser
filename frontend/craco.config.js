@@ -73,7 +73,19 @@ let webpackConfig = {
   eslint: {
     configure: {
       extends: ["plugin:react-hooks/recommended"],
+      // no-undef is the point of this block. Without it a missing import
+      // compiles cleanly and throws at runtime instead - which is exactly how a
+      // lucide icon went missing from ManuscriptDialogs.jsx and took the snip
+      // preview down with it. It needs env and parserOptions to know what a
+      // browser global is, or every window/document reference would be flagged.
+      env: { browser: true, es2021: true, node: true, jest: true },
+      parserOptions: {
+        ecmaVersion: 2021,
+        sourceType: "module",
+        ecmaFeatures: { jsx: true },
+      },
       rules: {
+        "no-undef": "error",
         "react-hooks/rules-of-hooks": "error",
         "react-hooks/exhaustive-deps": "warn",
       },
