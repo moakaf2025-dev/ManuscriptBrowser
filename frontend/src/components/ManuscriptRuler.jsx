@@ -1164,12 +1164,25 @@ export default function ManuscriptRuler() {
       return;
     }
     const tsv = filtered.map(([k, v]) => `${k}\t${String(v).replace(/\n/g, " ")}`).join("\n");
-    // Try rich HTML copy first for Word/Excel; fall back to plain text
+    const html = `<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;direction:rtl">${
+      filtered.map(([k, v]) => `<tr><td><b>${escapeHtml(k)}</b></td><td>${escapeHtml(v).replace(/\n/g,"<br>")}</td></tr>`).join("")
+    }</table>`;
+
+    // Electron's clipboard first: it takes text and html together, and unlike the
+    // web API it does not need the document focused or a non-file:// origin.
+    try {
+      if (window.msElectron?.copyTableToClipboard) {
+        const ok = await window.msElectron.copyTableToClipboard(tsv, html);
+        if (ok) {
+          showToast("نُسخت البطاقة كجدول");
+          return;
+        }
+      }
+    } catch { /* fall through */ }
+
+    // Browser route, for the web preview build.
     try {
       if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
-        const html = `<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;direction:rtl">${
-          filtered.map(([k, v]) => `<tr><td><b>${escapeHtml(k)}</b></td><td>${escapeHtml(v).replace(/\n/g,"<br>")}</td></tr>`).join("")
-        }</table>`;
         await navigator.clipboard.write([new ClipboardItem({
           "text/plain": new Blob([tsv], { type: "text/plain" }),
           "text/html": new Blob([html], { type: "text/html" }),

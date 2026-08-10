@@ -38,6 +38,17 @@ function createWindow() {
       sandbox: false,
       spellcheck: false,
       preload: path.join(__dirname, "preload.js"),
+      // The whole UI runs inside an iframe (SplitView gives each pane its own
+      // document and localStorage namespace). Without this the preload runs only
+      // in the top frame, window.msElectron is undefined where the app actually
+      // lives, and every clipboard call falls through to the web API - which
+      // file:// origins restrict. Copying a snip had no fallback at all and
+      // simply never worked.
+      //
+      // This only lets the preload run in child frames; it does not put Node in
+      // the page. contextIsolation stays on, nodeIntegration stays off, and the
+      // only frames ever loaded are this app's own local files.
+      nodeIntegrationInSubFrames: true,
     },
   });
 
@@ -101,6 +112,19 @@ ipcMain.handle("clipboard:image", async (_event, dataUrl) => {
 ipcMain.handle("clipboard:text", async (_event, text) => {
   try {
     clipboard.writeText(String(text ?? ""));
+    return true;
+  } catch (e) {
+    return false;
+  }
+});
+
+// Rich copy: the manuscript card is meant to paste into Word as a table, which
+// needs text/html on the clipboard. navigator.clipboard.write() is the web way
+// to do that and file:// origins refuse it, so route it through the main process.
+ipcMain.handle("clipboard:html", async (_event, payload) => {
+  try {
+    const { text, html } = payload || {};
+    clipboard.write({ text: String(text ?? ""), html: String(html ?? "") });
     return true;
   } catch (e) {
     return false;

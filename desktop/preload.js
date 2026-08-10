@@ -27,4 +27,14 @@ contextBridge.exposeInMainWorld("msElectron", {
       return false;
     }
   },
+
+  // Copy text and its HTML rendering together, so pasting into Word keeps the
+  // table. `navigator.clipboard.write` is the web equivalent and file:// blocks it.
+  copyTableToClipboard: async (text, html) => {
+    try {
+      return await ipcRenderer.invoke("clipboard:html", { text: String(text ?? ""), html: String(html ?? "") });
+    } catch {
+      return false;
+    }
+  },
 });
