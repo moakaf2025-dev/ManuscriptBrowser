@@ -1920,22 +1920,26 @@ export default function ManuscriptRuler() {
       // The shortcut list advertised seventeen keys; only six were ever bound, and
       // two button tooltips promised H and F11 as well. The rest are wired here,
       // through the same refs the toolbar buttons already use.
+      // Matched on e.code — the physical key — not e.key. With an Arabic keyboard
+      // layout the F key reports e.key "ب" and the = key reports "ـ", so matching
+      // on the character meant every letter shortcut died the moment the reader
+      // switched layout, which for this program's users is most of the time.
+      // e.code is the same whatever the layout.
       if (e.ctrlKey || e.metaKey) {
-        const k = e.key.toLowerCase();
         const ctrlActions = {
-          o: () => fileInputRef.current?.click(),
-          "=": () => zoomInRef.current(),
-          "+": () => zoomInRef.current(),
-          "-": () => zoomOutRef.current(),
-          _: () => zoomOutRef.current(),
-          f: () => hasFileRef.current && openAddCommentRef.current(),
-          b: () => hasFileRef.current && openAddHeadingRef.current(),
-          s: () => hasFileRef.current && snipRef.current(),
-          g: () => hasFileRef.current && setShowBookmarks((v) => !v),
+          KeyO: () => fileInputRef.current?.click(),
+          Equal: () => zoomInRef.current(),
+          NumpadAdd: () => zoomInRef.current(),
+          Minus: () => zoomOutRef.current(),
+          NumpadSubtract: () => zoomOutRef.current(),
+          KeyF: () => hasFileRef.current && openAddCommentRef.current(),
+          KeyB: () => hasFileRef.current && openAddHeadingRef.current(),
+          KeyS: () => hasFileRef.current && snipRef.current(),
+          KeyG: () => hasFileRef.current && setShowBookmarks((v) => !v),
         };
-        if (ctrlActions[k]) {
+        if (ctrlActions[e.code]) {
           e.preventDefault();
-          ctrlActions[k]();
+          ctrlActions[e.code]();
           return;
         }
         return; // leave other Ctrl combinations to the browser
@@ -1946,14 +1950,12 @@ export default function ManuscriptRuler() {
         toggleFullscreenRef.current();
         return;
       }
-      // Plain letters, matched case-insensitively so Caps Lock does not break them.
-      const plain = e.key.toLowerCase();
-      if (plain === "r" && hasFileRef.current) {
+      if (e.code === "KeyR" && hasFileRef.current) {
         e.preventDefault();
         rotateRef.current();
         return;
       }
-      if (plain === "h" && hasFileRef.current) {
+      if (e.code === "KeyH" && hasFileRef.current) {
         e.preventDefault();
         toggleRulerRef.current();
         return;
