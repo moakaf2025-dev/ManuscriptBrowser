@@ -169,14 +169,14 @@ function saveKV(key, data) {
   localStorage.setItem(key, JSON.stringify(data));
 }
 
-// Free everything a tab's document holds: the pdf.js document plus its worker, and
-// any object URLs minted for an image sequence (one per page of an archive).
-// Without this, closing a tab leaves the whole manuscript resident for the session.
+// Free everything a tab's document holds. Both kinds of document expose destroy():
+// pdf.js tears down its worker, and an image sequence revokes the object URLs of
+// whichever pages are still cached. Without this, closing a tab leaves the
+// manuscript resident for the session.
 function releaseTabResources(tab) {
   const base = tab?.baseDoc;
   if (!base) return;
   try { base.destroy?.(); } catch { /* noop */ }
-  try { (base._urls || []).forEach((u) => URL.revokeObjectURL(u)); } catch { /* noop */ }
 }
 
 const RECENTS_KEY = "manuscriptRulerRecents.v1" + _NS_SUFFIX;

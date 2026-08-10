@@ -18,14 +18,67 @@ export function loadImage(url) {
 }
 
 // ------------------- Image-sequence doc (pdf.js-like) -------------------
-function createImageDoc(imageUrls) {
+// Pages arrive as { name, load: () => Promise<Blob> } and are materialised only
+// when asked for. Opening a 600-page archive used to decompress every entry,
+// mint an object URL for each and hold all of it for the session; a manuscript
+// scanned at 300dpi costs tens of megabytes per page once decoded, so the app
+// spent minutes unpacking and then sat on gigabytes it would never look at.
+//
+// Only the last PAGE_CACHE pages stay resident. Evicting revokes the object URL;
+// the decoded bitmap goes when the browser drops the last reference to the image.
+const PAGE_CACHE = 6;
+
+export function createImageDoc(entries, { cacheSize = PAGE_CACHE } = {}) {
+  const cache = new Map(); // index -> { url, img }, iteration order = least recent first
+  const inflight = new Map();
+
+  const evict = () => {
+    while (cache.size > cacheSize) {
+      const oldest = cache.keys().next().value;
+      const held = cache.get(oldest);
+      cache.delete(oldest);
+      try { URL.revokeObjectURL(held.url); } catch { /* noop */ }
+    }
+  };
+
+  const acquire = async (index) => {
+    const hit = cache.get(index);
+    if (hit) {
+      cache.delete(index);
+      cache.set(index, hit); // touch: move to most-recent
+      return hit.img;
+    }
+    if (inflight.has(index)) return inflight.get(index);
+    const p = (async () => {
+      const blob = await entries[index].load();
+      const url = URL.createObjectURL(blob);
+      const img = await loadImage(url);
+      cache.set(index, { url, img });
+      evict();
+      return img;
+    })();
+    inflight.set(index, p);
+    try {
+      return await p;
+    } finally {
+      inflight.delete(index);
+    }
+  };
+
   return {
     kind: "images",
-    numPages: imageUrls.length,
-    _urls: imageUrls,
+    numPages: entries.length,
+    _entries: entries,
+    // Called when a tab closes, mirroring pdf.js's own destroy().
+    destroy: () => {
+      for (const held of cache.values()) {
+        try { URL.revokeObjectURL(held.url); } catch { /* noop */ }
+      }
+      cache.clear();
+      inflight.clear();
+    },
     getPage: async (pageNum) => {
-      const url = imageUrls[pageNum - 1];
-      const img = await loadImage(url);
+      const img = await acquire(pageNum - 1);
       return {
         _img: img,
         _width: img.naturalWidth,
@@ -231,16 +284,15 @@ export async function unpackZip(file, JSZip) {
   });
   // Sort by filename to preserve order
   entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  // Nothing is decompressed here. JSZip holds the archive's compressed bytes and
+  // inflates an entry only when its load() is called, which is what makes opening
+  // a large archive immediate instead of a long unpack.
   const images = [];
   const pdfs = [];
   for (const entry of entries) {
-    if (IMAGE_EXT.test(entry.name)) {
-      const blob = await entry.async("blob");
-      images.push({ name: entry.name, blob });
-    } else if (PDF_EXT.test(entry.name)) {
-      const blob = await entry.async("blob");
-      pdfs.push({ name: entry.name, blob });
-    }
+    const item = { name: entry.name, load: () => entry.async("blob") };
+    if (IMAGE_EXT.test(entry.name)) images.push(item);
+    else if (PDF_EXT.test(entry.name)) pdfs.push(item);
   }
   return { images, pdfs };
 }
@@ -271,19 +323,17 @@ export async function unpackArchive(file) {
     const pb = (b.path || "") + b.file.name;
     return pa.localeCompare(pb, undefined, { numeric: true, sensitivity: "base" });
   });
+  // Same deal as the zip path: hand back handles, extract on demand.
   const images = [];
   const pdfs = [];
   for (const f of files) {
     const name = f.file.name;
-    if (IMAGE_EXT.test(name)) {
+    const extractAs = async (fallbackType) => {
       const extracted = await f.file.extract();
-      const blob = new Blob([await extracted.arrayBuffer()], { type: extracted.type || "image/jpeg" });
-      images.push({ name, blob });
-    } else if (PDF_EXT.test(name)) {
-      const extracted = await f.file.extract();
-      const blob = new Blob([await extracted.arrayBuffer()], { type: "application/pdf" });
-      pdfs.push({ name, blob });
-    }
+      return new Blob([await extracted.arrayBuffer()], { type: extracted.type || fallbackType });
+    };
+    if (IMAGE_EXT.test(name)) images.push({ name, load: () => extractAs("image/jpeg") });
+    else if (PDF_EXT.test(name)) pdfs.push({ name, load: () => extractAs("application/pdf") });
   }
   return { images, pdfs };
 }
@@ -300,8 +350,7 @@ export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = fal
     base = await pdfjsLib.getDocument({ data: buf }).promise;
     base.kind = "pdf";
   } else if (IMAGE_EXT.test(name)) {
-    const url = URL.createObjectURL(file);
-    base = createImageDoc([url]);
+    base = createImageDoc([{ name: file.name, load: async () => file }]);
   } else if (/\.zip$/i.test(name) || ARCHIVE_EXT.test(name)) {
     const isZip = /\.zip$/i.test(name);
     const { images, pdfs } = isZip
@@ -310,17 +359,18 @@ export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = fal
     // If no images and multiple PDFs, merge them into one
     if (images.length === 0 && pdfs.length > 0) {
       if (pdfs.length === 1) {
-        const buf = await pdfs[0].blob.arrayBuffer();
+        const buf = await (await pdfs[0].load()).arrayBuffer();
         base = await pdfjsLib.getDocument({ data: buf }).promise;
         base.kind = "pdf";
       } else {
-        // Merge multiple PDFs via pdf-lib
+        // Merging genuinely needs every PDF, so these are extracted up front —
+        // unlike the image path, there is nothing to defer.
         const { PDFDocument } = await import("pdf-lib");
         const merged = await PDFDocument.create();
         // Sort PDFs by filename for consistent order
         pdfs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
         for (const p of pdfs) {
-          const buf = await p.blob.arrayBuffer();
+          const buf = await (await p.load()).arrayBuffer();
           const src = await PDFDocument.load(buf);
           const copied = await merged.copyPages(src, src.getPageIndices());
           copied.forEach((pg) => merged.addPage(pg));
@@ -330,8 +380,7 @@ export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = fal
         base.kind = "pdf";
       }
     } else if (images.length > 0) {
-      const urls = images.map((i) => URL.createObjectURL(i.blob));
-      base = createImageDoc(urls);
+      base = createImageDoc(images);
     } else {
       throw new Error("لا توجد صور أو ملفات PDF داخل الأرشيف");
     }
