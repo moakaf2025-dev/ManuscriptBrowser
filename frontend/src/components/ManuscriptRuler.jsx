@@ -75,6 +75,10 @@ const INFO_KEY = "manuscriptRulerInfo.v1" + _NS_SUFFIX;
 const HEADINGS_KEY = "manuscriptRulerHeadings.v1" + _NS_SUFFIX;
 const FOLD_OVERRIDES_KEY = "manuscriptRulerFoldOverrides.v1" + _NS_SUFFIX;
 const ZOOM_LEVELS = [0.1, 0.15, 0.2, 0.25, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10];
+// How long localStorage writes are coalesced. Long enough that a ruler drag or an
+// auto-scroll run costs one write instead of one per frame, short enough that a
+// crash loses at most this much of the reading position.
+const STATE_SAVE_MS = 500;
 
 const DEFAULT_STATE = {
   fileName: "",
@@ -160,9 +164,28 @@ function saveKV(key, data) {
   localStorage.setItem(key, JSON.stringify(data));
 }
 
+// Free everything a tab's document holds: the pdf.js document plus its worker, and
+// any object URLs minted for an image sequence (one per page of an archive).
+// Without this, closing a tab leaves the whole manuscript resident for the session.
+function releaseTabResources(tab) {
+  const base = tab?.baseDoc;
+  if (!base) return;
+  try { base.destroy?.(); } catch { /* noop */ }
+  try { (base._urls || []).forEach((u) => URL.revokeObjectURL(u)); } catch { /* noop */ }
+}
+
 const RECENTS_KEY = "manuscriptRulerRecents.v1" + _NS_SUFFIX;
 const AUTO_BM_KEY = "manuscriptRulerAutoBM.v1" + _NS_SUFFIX;
 const PER_FILE_SETTINGS_KEY = "manuscriptRulerPerFileSettings.v1" + _NS_SUFFIX;
+
+// State fields remembered per manuscript and restored the next time it is opened.
+const PER_FILE_KEYS = [
+  "brightness", "contrast", "saturate", "sharpen", "denoise",
+  "invert", "invertR", "invertG", "invertB",
+  "zoomIdx", "rotation",
+  "rulerHeight", "rulerWidth", "rulerAlign", "rulerColor", "rulerOpacity", "rulerShape", "rulerTilt", "dimAlpha", "dimEnabled",
+  "folioMode", "folioStart", "folioOffset",
+];
 
 const EMPTY_INFO = {
   type: "single",     // "single" | "collection"
@@ -283,25 +306,30 @@ export default function ManuscriptRuler() {
   };
 
   const closeTab = (idx) => {
-    setTabs((prev) => {
-      const copy = prev.filter((_, i) => i !== idx);
-      const closingActive = prev[idx].fileKey === state.fileKey;
-      if (closingActive) {
-        if (copy.length > 0) {
-          const target = copy[Math.min(idx, copy.length - 1)];
-          setBaseDoc(target.baseDoc);
-          setDoc(target.doc);
-          setPageCount(target.pageCount);
-          setState((s) => ({ ...s, fileName: target.fileName, fileKey: target.fileKey, page: target.page, rulerY: target.rulerY, splitPages: target.splitPages, splitFrom: target.splitFrom, splitTo: target.splitTo }));
-        } else {
-          setBaseDoc(null);
-          setDoc(null);
-          setPageCount(0);
-          setState((s) => ({ ...s, fileName: "", fileKey: "", fileType: "", page: 1, rulerY: 0 }));
-        }
+    const closing = tabs[idx];
+    if (!closing) return;
+    const copy = tabs.filter((_, i) => i !== idx);
+    const closingActive = closing.fileKey === state.fileKey;
+
+    if (closingActive) {
+      // Stop any render still drawing from the document we are about to destroy.
+      cancelActiveRender();
+      if (copy.length > 0) {
+        const target = copy[Math.min(idx, copy.length - 1)];
+        setBaseDoc(target.baseDoc);
+        setDoc(target.doc);
+        setPageCount(target.pageCount);
+        setState((s) => ({ ...s, fileName: target.fileName, fileKey: target.fileKey, page: target.page, rulerY: target.rulerY, splitPages: target.splitPages, splitFrom: target.splitFrom, splitTo: target.splitTo }));
+      } else {
+        setBaseDoc(null);
+        setDoc(null);
+        setPageCount(0);
+        setState((s) => ({ ...s, fileName: "", fileKey: "", fileType: "", page: 1, rulerY: 0 }));
       }
-      return copy;
-    });
+    }
+
+    setTabs(copy);
+    releaseTabResources(closing);
   };
   const [isFs, setIsFs] = useState(false);
 
@@ -322,6 +350,21 @@ export default function ManuscriptRuler() {
   const openAddHeadingRef = useRef(() => {});
   const snipRef = useRef(() => {});
   const renderPageRef = useRef(() => {});
+  // In-flight page render (pdf.js RenderTask) + a monotonic tag used to drop
+  // continuations of renders that a newer one has superseded.
+  const renderTaskRef = useRef(null);
+  const renderSeqRef = useRef(0);
+
+  // Abandon the in-flight render without starting a new one. Bumping the tag makes
+  // the running attempt discard its result, so it cannot touch a document we are
+  // about to destroy.
+  const cancelActiveRender = useCallback(() => {
+    renderSeqRef.current += 1;
+    if (renderTaskRef.current) {
+      try { renderTaskRef.current.cancel?.(); } catch { /* noop */ }
+      renderTaskRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     stateRef.current = state;
@@ -331,10 +374,29 @@ export default function ManuscriptRuler() {
     pageSizeRef.current = pageSize;
   }, [pageSize]);
 
-  // Persist state & bookmarks
+  // Persist state & bookmarks.
+  // `state` changes on every animation frame while the ruler auto-scrolls (rulerY)
+  // and on every mousemove while it is dragged. localStorage.setItem is synchronous,
+  // so writing on each change stalls the main thread. Coalesce into one write per
+  // STATE_SAVE_MS and flush whatever is pending before the window goes away.
+  const stateSaveTimerRef = useRef(null);
+  const flushStateSave = useCallback(() => {
+    if (!stateSaveTimerRef.current) return;
+    clearTimeout(stateSaveTimerRef.current);
+    stateSaveTimerRef.current = null;
+    try { saveState(stateRef.current); } catch { /* noop */ }
+  }, []);
+
   useEffect(() => {
-    saveState(state);
+    if (stateSaveTimerRef.current) return; // a write is already scheduled
+    stateSaveTimerRef.current = setTimeout(() => {
+      stateSaveTimerRef.current = null;
+      try { saveState(stateRef.current); } catch { /* noop */ }
+    }, STATE_SAVE_MS);
   }, [state]);
+
+  // Flush on unmount so a pane closing mid-interval does not lose the last change.
+  useEffect(() => flushStateSave, [flushStateSave]);
 
   useEffect(() => {
     saveBookmarks(bookmarksMap);
@@ -380,6 +442,10 @@ export default function ManuscriptRuler() {
       const baseD = await buildDocFromFile(file, { pdfjsLib, JSZip, splitPages: false });
       const range = { from: 1, to: baseD.numPages };
       const wrapped = baseD; // always start without splitting; user opts in
+      // Re-opening a file already in a tab replaces its document — free the old one
+      // (and stop anything still rendering from it) instead of stranding it.
+      const supersededTab = tabs.find((t) => t.fileKey === fileKey);
+      if (supersededTab) cancelActiveRender();
       setBaseDoc(baseD);
       setDoc(wrapped);
       setPageCount(wrapped.numPages);
@@ -452,6 +518,7 @@ export default function ManuscriptRuler() {
         }
         return [...prev, tabObj];
       });
+      if (supersededTab) releaseTabResources(supersededTab);
 
       setState((s) => ({ ...s, ...(restoredSettings || {}), fileName: file.name, fileKey, fileType: ft, page: restoredPage, rulerY: restoredY, splitPages: false, splitFrom: 1, splitTo: baseD.numPages }));
     } catch (e) {
@@ -473,9 +540,22 @@ export default function ManuscriptRuler() {
   const renderPage = useCallback(
     async (pageNum) => {
       if (!doc || !canvasRef.current) return;
+
+      // Only one render may own the canvas at a time: pdf.js throws
+      // "Cannot use the same canvas during multiple render() operations", and a
+      // slow earlier render that finishes late would paint the wrong page.
+      // Cancel what is in flight, then tag this run so stale continuations bail.
+      if (renderTaskRef.current) {
+        try { renderTaskRef.current.cancel?.(); } catch { /* noop */ }
+        renderTaskRef.current = null;
+      }
+      const seq = ++renderSeqRef.current;
+      const isStale = () => seq !== renderSeqRef.current;
+
       setLoading(true);
       try {
         const page = await doc.getPage(pageNum);
+        if (isStale()) return;
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
         const renderScale = 1.5 * scale;
         const viewport = page.getViewport({ scale: renderScale, rotation: state.rotation });
@@ -487,7 +567,10 @@ export default function ManuscriptRuler() {
         canvas.style.height = `${viewport.height}px`;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, viewport.width, viewport.height);
-        await page.render({ canvasContext: ctx, viewport }).promise;
+        const task = page.render({ canvasContext: ctx, viewport });
+        renderTaskRef.current = task;
+        await task.promise;
+        if (isStale()) return;
         // Apply pixel-level filters: RGB channel inverts + sharpen + denoise
         try {
           const st = stateRef.current;
@@ -519,9 +602,14 @@ export default function ManuscriptRuler() {
         } catch (err) { /* ignore filter errors */ }
         setPageSize({ w: viewport.width, h: viewport.height });
       } catch (e) {
-        console.error(e);
+        // A cancelled render is the expected outcome of fast paging/zooming.
+        if (e?.name !== "RenderingCancelledException") console.error(e);
       } finally {
-        setLoading(false);
+        // A newer render already took over the canvas and the spinner — leave both to it.
+        if (!isStale()) {
+          renderTaskRef.current = null;
+          setLoading(false);
+        }
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -529,7 +617,10 @@ export default function ManuscriptRuler() {
   );
 
   useEffect(() => {
+    // No document left (last tab closed): nothing will clear the spinner a
+    // cancelled render left behind, so clear it here.
     if (doc) renderPage(state.page);
+    else setLoading(false);
     renderPageRef.current = renderPage;
   }, [doc, state.page, state.rotation, state.zoomIdx, state.invertR, state.invertG, state.invertB, state.sharpen, state.denoise, renderPage]);
 
@@ -559,24 +650,27 @@ export default function ManuscriptRuler() {
     };
   }, [thumbsWidth]);
 
-  // Save current image/browse/ruler settings per file so they restore next time
+  // Save current image/browse/ruler settings per file so they restore next time.
+  // Coalesced for the same reason as the main state: the brightness/contrast/sharpen
+  // sliders fire on every mousemove, and each write re-parses and re-serialises the
+  // settings map for every file ever opened.
+  const perFileSaveTimerRef = useRef(null);
   useEffect(() => {
     if (!state.fileKey) return;
-    const perFileKeys = [
-      "brightness", "contrast", "saturate", "sharpen", "denoise",
-      "invert", "invertR", "invertG", "invertB",
-      "zoomIdx", "rotation",
-      "rulerHeight", "rulerWidth", "rulerAlign", "rulerColor", "rulerOpacity", "rulerShape", "rulerTilt", "dimAlpha", "dimEnabled",
-      "folioMode", "folioStart", "folioOffset",
-    ];
-    try {
-      const raw = localStorage.getItem(PER_FILE_SETTINGS_KEY);
-      const map = raw ? JSON.parse(raw) : {};
-      const patch = {};
-      for (const k of perFileKeys) patch[k] = state[k];
-      map[state.fileKey] = patch;
-      localStorage.setItem(PER_FILE_SETTINGS_KEY, JSON.stringify(map));
-    } catch { /* noop */ }
+    if (perFileSaveTimerRef.current) return;
+    perFileSaveTimerRef.current = setTimeout(() => {
+      perFileSaveTimerRef.current = null;
+      const s = stateRef.current;
+      if (!s.fileKey) return;
+      try {
+        const raw = localStorage.getItem(PER_FILE_SETTINGS_KEY);
+        const map = raw ? JSON.parse(raw) : {};
+        const patch = {};
+        for (const k of PER_FILE_KEYS) patch[k] = s[k];
+        map[s.fileKey] = patch;
+        localStorage.setItem(PER_FILE_SETTINGS_KEY, JSON.stringify(map));
+      } catch { /* noop */ }
+    }, STATE_SAVE_MS);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     state.fileKey, state.brightness, state.contrast, state.saturate, state.sharpen, state.denoise,
@@ -587,26 +681,34 @@ export default function ManuscriptRuler() {
     state.folioMode, state.folioStart, state.folioOffset,
   ]);
 
+  // Save the auto-bookmark (reading position) when the window is closed or hidden.
+  // Subscribed once: the live values come from stateRef, so this must NOT depend on
+  // state.page / state.rulerY — those change every frame during ruler auto-scroll,
+  // and re-subscribing per frame piles up listeners that are never released.
   useEffect(() => {
     const persist = () => {
-      if (!state.fileKey) return;
+      const s = stateRef.current;
+      if (!s.fileKey) return;
       try {
         const raw = localStorage.getItem(AUTO_BM_KEY);
         const map = raw ? JSON.parse(raw) : {};
-        map[state.fileKey] = { page: state.page, y: state.rulerY, at: Date.now() };
+        map[s.fileKey] = { page: s.page, y: s.rulerY, at: Date.now() };
         localStorage.setItem(AUTO_BM_KEY, JSON.stringify(map));
       } catch { /* noop */ }
+      flushStateSave();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") persist();
     };
     window.addEventListener("beforeunload", persist);
     window.addEventListener("pagehide", persist);
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") persist();
-    });
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("beforeunload", persist);
       window.removeEventListener("pagehide", persist);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [state.fileKey, state.page, state.rulerY]);
+  }, [flushStateSave]);
 
   // Auto-activate hand tool when zoomed to ≥100%
   useEffect(() => {
