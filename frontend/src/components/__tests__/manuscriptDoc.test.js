@@ -1,4 +1,7 @@
-import { formatFolio, toggleSplitDoc, fitCanvasScale, createImageDoc } from "../manuscriptDoc";
+import {
+  formatFolio, toggleSplitDoc, fitCanvasScale, createImageDoc,
+  createOrderedDoc, defaultPageOrder, movePage,
+} from "../manuscriptDoc";
 
 describe("formatFolio", () => {
   it("numbers two viewer pages to one folio, recto then verso", () => {
@@ -155,6 +158,73 @@ describe("lazy image pages", () => {
     expect(revoked).toEqual([]);
     doc.destroy();
     expect(revoked.sort()).toEqual(["blob:0", "blob:1", "blob:2"]);
+  });
+});
+
+describe("page order", () => {
+  const baseDoc = (numPages) => ({
+    kind: "images",
+    numPages,
+    getPage: async (n) => ({ _sourcePage: n }),
+  });
+
+  it("passes the document through untouched when the order is the natural one", () => {
+    const base = baseDoc(5);
+    expect(createOrderedDoc(base, [1, 2, 3, 4, 5])).toBe(base);
+    expect(createOrderedDoc(base, null)).toBe(base);
+    expect(createOrderedDoc(base, [])).toBe(base);
+  });
+
+  it("shows pages in the order given", async () => {
+    const doc = createOrderedDoc(baseDoc(5), [3, 1, 2, 5, 4]);
+    expect(doc.numPages).toBe(5);
+    expect((await doc.getPage(1))._sourcePage).toBe(3);
+    expect((await doc.getPage(2))._sourcePage).toBe(1);
+    expect((await doc.getPage(5))._sourcePage).toBe(4);
+  });
+
+  it("hides a page left out of the order without renumbering the source", async () => {
+    const doc = createOrderedDoc(baseDoc(5), [1, 2, 4, 5]); // page 3 removed
+    expect(doc.numPages).toBe(4);
+    expect((await doc.getPage(3))._sourcePage).toBe(4);
+    expect(doc.toDisplayPage(3)).toBeNull();  // hidden
+    expect(doc.toDisplayPage(4)).toBe(3);
+  });
+
+  it("maps both ways so annotations can follow their own page", () => {
+    const doc = createOrderedDoc(baseDoc(4), [4, 3, 2, 1]);
+    for (const src of [1, 2, 3, 4]) {
+      expect(doc.toSourcePage(doc.toDisplayPage(src))).toBe(src);
+    }
+  });
+
+  it("ignores entries that are not real pages", () => {
+    const doc = createOrderedDoc(baseDoc(3), [2, 99, 0, -1, 1, null, 3]);
+    expect(doc._order).toEqual([2, 1, 3]);
+  });
+
+  it("moves a page without losing or duplicating any", () => {
+    const order = defaultPageOrder(6);
+    expect(movePage(order, 0, 3)).toEqual([2, 3, 4, 1, 5, 6]);
+    expect(movePage(order, 5, 0)).toEqual([6, 1, 2, 3, 4, 5]);
+    expect(movePage(order, 2, 2)).toEqual(order);
+    const moved = movePage(order, 4, 1);
+    expect([...moved].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it("leaves the order alone for an out-of-range move", () => {
+    const order = defaultPageOrder(4);
+    expect(movePage(order, -1, 2)).toEqual(order);
+    expect(movePage(order, 0, 9)).toEqual(order);
+  });
+
+  it("survives being stacked under the splitting layer", async () => {
+    // Reordering happens before numbering, so splitting sees the reordered pages.
+    const ordered = createOrderedDoc(baseDoc(4), [4, 3, 2, 1]);
+    const split = toggleSplitDoc(ordered, true, { from: 1, to: 2 });
+    expect(split.numPages).toBe(6); // 4 pages, first two split in half
+    expect(split.resolve(1)).toEqual({ basePage: 1, split: true, side: 0 });
+    expect((await ordered.getPage(1))._sourcePage).toBe(4);
   });
 });
 

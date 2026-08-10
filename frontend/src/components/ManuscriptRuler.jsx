@@ -51,7 +51,10 @@ import {
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import JSZip from "jszip";
-import { buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf, fitCanvasScale, FILTERED_MAX_PIXELS } from "./manuscriptDoc";
+import {
+  buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf, fitCanvasScale,
+  FILTERED_MAX_PIXELS, createOrderedDoc, defaultPageOrder, movePage,
+} from "./manuscriptDoc";
 import { buildHeadingsDocument, buildCommentsDocument, toDocxBlob } from "./manuscriptExport";
 import {
   BookmarkModal, InfoEditorModal, HeadingModal, CommentModal,
@@ -79,6 +82,7 @@ const COMMENTS_KEY = "manuscriptRulerComments.v1" + _NS_SUFFIX;
 const INFO_KEY = "manuscriptRulerInfo.v1" + _NS_SUFFIX;
 const HEADINGS_KEY = "manuscriptRulerHeadings.v1" + _NS_SUFFIX;
 const FOLD_OVERRIDES_KEY = "manuscriptRulerFoldOverrides.v1" + _NS_SUFFIX;
+const PAGE_ORDER_KEY = "manuscriptRulerPageOrder.v1" + _NS_SUFFIX;
 const ZOOM_LEVELS = [0.1, 0.15, 0.2, 0.25, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10];
 // How long localStorage writes are coalesced. Long enough that a ruler drag or an
 // auto-scroll run costs one write instead of one per frame, short enough that a
@@ -255,6 +259,11 @@ export default function ManuscriptRuler() {
   const [tabs, setTabs] = useState([]);
   const [headingsMap, setHeadingsMap] = useState(() => loadKV(HEADINGS_KEY));
   const [foldOverridesMap, setFoldOverridesMap] = useState(() => loadKV(FOLD_OVERRIDES_KEY));
+  // Per file: the source pages to show, in the order to show them. Absent means
+  // "as photographed". See createOrderedDoc — nothing is destroyed, so a page
+  // removed here can always be brought back.
+  const [pageOrderMap, setPageOrderMap] = useState(() => loadKV(PAGE_ORDER_KEY));
+  const [showPageManager, setShowPageManager] = useState(false);
   // A stable ref that createSplittingDoc will read from at render-time, so slider
   // adjustments take effect without recreating the doc every keystroke.
   const foldOverridesForCurrentFileRef = useRef({});
@@ -276,6 +285,9 @@ export default function ManuscriptRuler() {
   const [headingModal, setHeadingModal] = useState(null); // {editingId?, page, title, level}
   const [toast, setToast] = useState("");
   const [showAdvancedImage, setShowAdvancedImage] = useState(false);
+  // The page manager edits a working copy; nothing takes effect until "تطبيق".
+  const [workingOrder, setWorkingOrder] = useState([]);
+  const [pmDragIdx, setPmDragIdx] = useState(null);
 
   const hasFile = Boolean(doc);
 
@@ -423,6 +435,10 @@ export default function ManuscriptRuler() {
   }, [headingsMap]);
 
   useEffect(() => {
+    saveKV(PAGE_ORDER_KEY, pageOrderMap);
+  }, [pageOrderMap]);
+
+  useEffect(() => {
     saveKV(FOLD_OVERRIDES_KEY, foldOverridesMap);
     // Keep the "current file" ref in sync so createSplittingDoc reads latest overrides.
     foldOverridesForCurrentFileRef.current = foldOverridesMap[state.fileKey] || {};
@@ -470,7 +486,9 @@ export default function ManuscriptRuler() {
       if (isArchive) setLoadingMsg("جارٍ فك ضغط الملف…");
       const baseD = await buildDocFromFile(file, { pdfjsLib, JSZip, splitPages: false });
       const range = { from: 1, to: baseD.numPages };
-      const wrapped = baseD; // always start without splitting; user opts in
+      // Restore any page order saved for this manuscript; splitting always starts off.
+      const savedOrder = (loadKV(PAGE_ORDER_KEY) || {})[fileKey] || null;
+      const wrapped = createOrderedDoc(baseD, savedOrder);
       // Re-opening a file already in a tab replaces its document — free the old one
       // (and stop anything still rendering from it) instead of stranding it.
       const supersededTab = tabs.find((t) => t.fileKey === fileKey);
@@ -974,6 +992,45 @@ export default function ManuscriptRuler() {
   };
   const toggleRuler = () => setState((s) => ({ ...s, rulerVisible: !s.rulerVisible }));
 
+  // ---------------- Document composition ----------------
+  // base -> page order -> splitting, in that order. Reordering is the step a reader
+  // does before numbering — sheets photographed out of sequence get put right first
+  // — so the split range and the folio numbers both describe the pages as shown.
+  const composeDoc = (base, order, split, range) => {
+    const ordered = createOrderedDoc(base, order);
+    return split ? toggleSplitDoc(ordered, true, range, foldOverridesForCurrentFileRef) : ordered;
+  };
+
+  const currentOrder = state.fileKey ? pageOrderMap[state.fileKey] || null : null;
+  const sourcePageCount = baseDoc ? baseDoc.numPages : 0;
+
+  const hiddenPages = React.useMemo(() => {
+    if (!sourcePageCount) return [];
+    const shown = new Set(workingOrder);
+    return defaultPageOrder(sourcePageCount).filter((n) => !shown.has(n));
+  }, [workingOrder, sourcePageCount]);
+
+  // Re-apply an edited order to the open document.
+  const applyPageOrder = (order) => {
+    if (!baseDoc || !state.fileKey) return;
+    const normalised =
+      order && order.length && !(order.length === sourcePageCount && order.every((n, i) => n === i + 1))
+        ? order
+        : null;
+    setPageOrderMap((m) => {
+      const next = { ...m };
+      if (normalised) next[state.fileKey] = normalised;
+      else delete next[state.fileKey];
+      return next;
+    });
+    const range = { from: state.splitFrom, to: state.splitTo };
+    const wrapped = composeDoc(baseDoc, normalised, state.splitPages, range);
+    cancelActiveRender();
+    setDoc(wrapped);
+    setPageCount(wrapped.numPages);
+    setState((s) => ({ ...s, page: Math.min(Math.max(1, s.page), wrapped.numPages), rulerY: 0 }));
+  };
+
   // ---------------- Split pages (smart fold detection) ----------------
   const toggleSplit = async () => {
     if (!baseDoc) return;
@@ -982,7 +1039,7 @@ export default function ManuscriptRuler() {
     setLoadingMsg(next ? "جارٍ الكشف عن خط طي الصفحات…" : "جارٍ استعادة الصفحات الأصلية…");
     try {
       const range = { from: state.splitFrom, to: Math.min(state.splitTo, baseDoc.numPages) };
-      const wrapped = toggleSplitDoc(baseDoc, next, range, foldOverridesForCurrentFileRef);
+      const wrapped = composeDoc(baseDoc, currentOrder, next, range);
       setDoc(wrapped);
       setPageCount(wrapped.numPages);
       setState((s) => ({
@@ -1007,7 +1064,7 @@ export default function ManuscriptRuler() {
     setLoadingMsg("جارٍ إعادة تطبيق التقسيم…");
     try {
       const range = { from, to: Math.min(to, baseDoc.numPages) };
-      const wrapped = toggleSplitDoc(baseDoc, true, range, foldOverridesForCurrentFileRef);
+      const wrapped = composeDoc(baseDoc, currentOrder, true, range);
       setDoc(wrapped);
       setPageCount(wrapped.numPages);
       setState((s) => ({ ...s, splitFrom: from, splitTo: to, page: 1, rulerY: 0 }));
@@ -1287,15 +1344,19 @@ export default function ManuscriptRuler() {
   // the document changes, so a half-finished pass stops instead of racing the next.
   const thumbsRunRef = useRef(0);
 
+  // Thumbnails are of the SOURCE pages, indexed by source number, because the page
+  // manager reorders those. Generating from `doc` would give display pages, which
+  // shift under the very edit the manager is making.
   const generateThumbs = useCallback(async () => {
-    if (!doc) return;
+    const src = baseDoc;
+    if (!src) return;
     const run = ++thumbsRunRef.current;
-    const total = pageCount;
+    const total = src.numPages;
     setThumbUrls(new Array(total).fill(null));
     for (let i = 1; i <= total; i++) {
       if (run !== thumbsRunRef.current) return;
       try {
-        const page = await doc.getPage(i);
+        const page = await src.getPage(i);
         if (run !== thumbsRunRef.current) return;
         const vp = page.getViewport({ scale: 1, rotation: 0 });
         const targetW = 120;
@@ -1320,17 +1381,17 @@ export default function ManuscriptRuler() {
       // hand the main thread back between pages so the viewer stays responsive
       await new Promise((r) => setTimeout(r, 0));
     }
-  }, [doc, pageCount]);
+  }, [baseDoc]);
 
   useEffect(() => {
-    if (showThumbs && doc) {
+    if (showPageManager && baseDoc) {
       generateThumbs();
     } else {
       thumbsRunRef.current += 1; // retire any pass still running
       setThumbUrls([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showThumbs, doc, pageCount]);
+  }, [showPageManager, baseDoc]);
 
   // ---------------- Export as indexed PDF with bookmarks ----------------
   const exportCroppedPdf = async () => {
@@ -2350,11 +2411,16 @@ export default function ManuscriptRuler() {
         </button>
 
         <button
-          className={`mr-btn mr-btn-icon ${showThumbs ? "mr-btn-active" : ""}`}
-          onClick={() => hasFile && setShowThumbs((v) => !v)}
+          className={`mr-btn mr-btn-icon ${showPageManager ? "mr-btn-active" : ""}`}
+          onClick={() => {
+            if (!hasFile) return;
+            // Seed the working copy from whatever order is in force right now.
+            setWorkingOrder(currentOrder ? [...currentOrder] : defaultPageOrder(sourcePageCount));
+            setShowPageManager(true);
+          }}
           disabled={!hasFile}
-          title="شريط الصفحات المصغّرة"
-          data-testid="mr-btn-thumbs"
+          title="ترتيب الصفحات (نقل / إخفاء / استرجاع)"
+          data-testid="mr-btn-page-manager"
         >
           <LayoutGrid size={18} />
         </button>
@@ -3272,47 +3338,90 @@ export default function ManuscriptRuler() {
         )}
 
         {/* Vertical thumbnails strip */}
-        {showThumbs && hasFile && (
-          <div
-            className="mr-thumbs"
-            data-testid="mr-thumbs-strip"
-            style={{ width: thumbsWidth }}
-          >
-            {thumbUrls.length === 0 && (
-              <div style={{ padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>جارٍ إنشاء المصغّرات…</div>
-            )}
-            {thumbUrls.map((url, i) => {
-              const pg = i + 1;
-              const isActive = pg === state.page;
-              const hasBookmark = currentBookmarks.some((b) => b.page === pg);
-              const hasComment = currentComments.some((c) => c.page === pg);
-              const hasHeading = currentHeadings.some((h) => h.page === pg);
-              return (
-                <div key={i} className={`mr-thumb ${isActive ? "active" : ""}`} onClick={() => setState((s) => ({ ...s, page: pg, rulerY: 0 }))} data-testid="mr-thumb">
-                  {/* The strip fills in page by page, so a slot may not be rendered yet. */}
-                  {url
-                    ? <img src={url} alt={`page ${pg}`} />
-                    : <div className="mr-thumb-pending" aria-hidden="true" />}
-                  <div className="mr-thumb-label">
-                    {state.folioMode ? formatFolio(pg, { startFolio: state.folioStart, offset: state.folioOffset }) : pg}
+        {showPageManager && hasFile && (
+          <div className="mr-pm-overlay" data-testid="mr-page-manager" onClick={() => setShowPageManager(false)}>
+            <div className="mr-pm-card" onClick={(e) => e.stopPropagation()}>
+              <div className="mr-pm-head">
+                <h2>ترتيب صفحات المخطوط</h2>
+                <span className="mr-pm-hint">
+                  رتّب الصفحات قبل الترقيم. الصفحة المحذوفة تُخفى فقط ويمكن استرجاعها — لا يُحذف شيء من الملف الأصلي.
+                </span>
+                <button className="mr-modal-x" onClick={() => setShowPageManager(false)} data-testid="mr-pm-close" title="إغلاق"><X size={16} /></button>
+              </div>
+
+              <div className="mr-pm-bar">
+                <span className="mr-pm-count" data-testid="mr-pm-count">
+                  المعروض {workingOrder.length} من {sourcePageCount}
+                  {hiddenPages.length > 0 && ` · مخفي ${hiddenPages.length}`}
+                </span>
+                <button className="mr-btn" onClick={() => setWorkingOrder(defaultPageOrder(sourcePageCount))} data-testid="mr-pm-reset">
+                  <RotateCcw size={13} /> ترتيب الملف الأصلي
+                </button>
+                <button className="mr-btn" onClick={() => setWorkingOrder([...workingOrder].reverse())} data-testid="mr-pm-reverse">
+                  عكس الترتيب
+                </button>
+                <button
+                  className="mr-btn mr-btn-primary"
+                  onClick={() => { applyPageOrder(workingOrder); setShowPageManager(false); showToast("طُبِّق ترتيب الصفحات"); }}
+                  data-testid="mr-pm-apply"
+                >
+                  <Save size={13} /> تطبيق
+                </button>
+              </div>
+
+              <div className="mr-pm-grid" data-testid="mr-pm-grid">
+                {workingOrder.map((src, idx) => (
+                  <div
+                    key={src}
+                    className={`mr-pm-page ${pmDragIdx === idx ? "dragging" : ""}`}
+                    data-testid="mr-pm-page"
+                    draggable
+                    onDragStart={() => setPmDragIdx(idx)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => {
+                      if (pmDragIdx != null) setWorkingOrder(movePage(workingOrder, pmDragIdx, idx));
+                      setPmDragIdx(null);
+                    }}
+                    onDragEnd={() => setPmDragIdx(null)}
+                  >
+                    <div className="mr-pm-thumb">
+                      {thumbUrls[src - 1]
+                        ? <img src={thumbUrls[src - 1]} alt={`صفحة ${src}`} />
+                        : <div className="mr-thumb-pending" aria-hidden="true" />}
+                    </div>
+                    <div className="mr-pm-meta">
+                      <span className="mr-pm-pos">{idx + 1}</span>
+                      <span className="mr-pm-src" title="رقم الصفحة في الملف الأصلي">أصل {src}</span>
+                    </div>
+                    <div className="mr-pm-actions">
+                      {/* RTL: earlier is to the right */}
+                      <button className="mr-btn" title="نقل إلى اليمين (أسبق)" data-testid="mr-pm-earlier"
+                        disabled={idx === 0}
+                        onClick={() => setWorkingOrder(movePage(workingOrder, idx, idx - 1))}>‹</button>
+                      <button className="mr-btn" title="نقل إلى اليسار (أأخر)" data-testid="mr-pm-later"
+                        disabled={idx === workingOrder.length - 1}
+                        onClick={() => setWorkingOrder(movePage(workingOrder, idx, idx + 1))}>›</button>
+                      <button className="mr-btn" title="إخفاء هذه الصفحة" data-testid="mr-pm-hide"
+                        onClick={() => setWorkingOrder(workingOrder.filter((_, i) => i !== idx))}><Trash2 size={12} /></button>
+                    </div>
                   </div>
-                  <div className="mr-thumb-markers">
-                    {hasHeading && <span className="marker head" title="عنوان">H</span>}
-                    {hasBookmark && <span className="marker bm" title="علامة">★</span>}
-                    {hasComment && <span className="marker cm" title="تعليق">💬</span>}
+                ))}
+              </div>
+
+              {hiddenPages.length > 0 && (
+                <div className="mr-pm-hidden" data-testid="mr-pm-hidden">
+                  <div className="mr-pop-title">صفحات مخفية — اضغط لاسترجاعها:</div>
+                  <div className="mr-pm-hidden-row">
+                    {hiddenPages.map((src) => (
+                      <button key={src} className="mr-btn" data-testid="mr-pm-restore"
+                        onClick={() => setWorkingOrder([...workingOrder, src].sort((a, b) => a - b))}>
+                        <Plus size={12} /> أصل {src}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              );
-            })}
-            <div
-              className="mr-thumbs-resizer"
-              data-testid="mr-thumbs-resizer"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                thumbsDragRef.current = { startX: e.clientX, startW: thumbsWidth };
-              }}
-              title="اسحب لتغيير حجم شريط المصغّرات"
-            />
+              )}
+            </div>
           </div>
         )}
 

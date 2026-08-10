@@ -110,6 +110,58 @@ export function createImageDoc(entries, { cacheSize = PAGE_CACHE } = {}) {
   };
 }
 
+// ------------------- Page-order wrapper -------------------
+// Manuscripts get photographed out of order, upside down, or with stray sheets.
+// This layer lets the reader fix that before numbering: `order` is the list of
+// source pages to show, in the order to show them. A page left out of `order` is
+// simply not shown — nothing is thrown away, so removing is always undoable.
+//
+// Deliberately a view, not an edit. Everything anchored to a page (comments,
+// headings, fold overrides) refers to the *source* page, so moving a sheet moves
+// its annotations with it and deleting one hides them rather than shifting them
+// onto a neighbour.
+export function createOrderedDoc(baseDoc, order) {
+  const total = baseDoc.numPages;
+  const clean = Array.isArray(order)
+    ? order.filter((n) => Number.isInteger(n) && n >= 1 && n <= total)
+    : null;
+  // No order, or one that says exactly what the document already says: skip the layer.
+  if (!clean || clean.length === 0) return baseDoc;
+  if (clean.length === total && clean.every((n, i) => n === i + 1)) return baseDoc;
+
+  return {
+    kind: "ordered-" + baseDoc.kind,
+    numPages: clean.length,
+    _base: baseDoc,
+    _order: clean,
+    // display page (1-based) -> source page (1-based)
+    toSourcePage: (displayPage) => clean[displayPage - 1] ?? null,
+    // source page -> display page, or null when that page is currently hidden
+    toDisplayPage: (sourcePage) => {
+      const i = clean.indexOf(sourcePage);
+      return i === -1 ? null : i + 1;
+    },
+    destroy: () => { try { baseDoc.destroy?.(); } catch { /* noop */ } },
+    getPage: (displayPage) => baseDoc.getPage(clean[displayPage - 1]),
+  };
+}
+
+// The identity order for a document, which is what the page manager starts from.
+export function defaultPageOrder(numPages) {
+  return Array.from({ length: numPages }, (_, i) => i + 1);
+}
+
+// Move one entry of an order array to another position, returning a new array.
+export function movePage(order, from, to) {
+  if (!Array.isArray(order)) return order;
+  const n = order.length;
+  if (from < 0 || from >= n || to < 0 || to >= n || from === to) return order.slice();
+  const next = order.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
 // ------------------- Splitting-doc wrapper -------------------
 // Given a base doc, produces a doc where pages within `range` are split into two,
 // and pages outside `range` remain single. RTL: right half first (recto), then left (verso).
