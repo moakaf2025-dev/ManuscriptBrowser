@@ -307,6 +307,55 @@ export function fitCanvasScale(width, height, desired = 1, maxPixels = MAX_CANVA
   return Math.max(0.05, Math.min(desired, bySide, byArea));
 }
 
+// ------------------- Export size estimation -------------------
+// Extrapolate the whole export from a handful of pages actually encoded at the
+// chosen settings. Guessing from pixel counts is not good enough: how a page
+// compresses depends on what is on it, and a manuscript's pages resemble each
+// other far more than they resemble any formula.
+export function extrapolateExportSize(sampleBytes, totalPages) {
+  const samples = (sampleBytes || []).filter((n) => Number.isFinite(n) && n > 0);
+  if (!samples.length || !(totalPages > 0)) return null;
+  const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+  const spread = samples.length > 1 ? Math.max(...samples) / Math.min(...samples) : 1;
+  return {
+    estimate: Math.round(mean * totalPages),
+    perPage: Math.round(mean),
+    sampled: samples.length,
+    // How much the sampled pages differ from each other. A manuscript of plain
+    // text pages sits near 1; a mix of blank leaves and dense illumination does
+    // not, and then a single number deserves less trust.
+    confidence: spread <= 1.5 ? "high" : spread <= 3 ? "medium" : "low",
+  };
+}
+
+// Settings that keep the ink legible rather than the file small.
+//
+// The default was 4000px at 95% quality, which for most scans means upscaling
+// nothing but storing JPEG artefacts at a fidelity no reader can see. Capping at
+// the source's own longest side avoids inventing pixels, and 88% is where JPEG
+// stops visibly softening the edges of Arabic script while still compressing well.
+export function recommendExportSettings(sourceLongestSide) {
+  const src = Number.isFinite(sourceLongestSide) && sourceLongestSide > 0 ? sourceLongestSide : 4000;
+  const maxSize = Math.max(1200, Math.min(3000, Math.round(src)));
+  return {
+    maxSize,
+    quality: 88,
+    reason:
+      src > 3000
+        ? "مصوّرة عالية الدقة: 3000px تكفي لقراءة الحبر ومقابلته، وما فوقها يضاعف الحجم بلا فائدة مرئية"
+        : "الحدّ مضبوط على دقة المصوّرة نفسها، فلا تُخترع بكسلات ولا تُفقد تفاصيل",
+  };
+}
+
+export function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "—";
+  const units = ["بايت", "ك.ب", "م.ب", "ج.ب"];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
 // ------------------- Fold detection -------------------
 // Detects the vertical fold line by finding the column (within middle 30-70%)
 // with the lowest average brightness (typical fold shadow / gutter).

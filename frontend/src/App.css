@@ -753,6 +753,41 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   margin: 6px 0;
 }
 
+/* Export size panel: what the file weighs now and what it will weigh after. */
+.mr-export-size {
+  background: var(--ink-3);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.mr-export-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 2px 0;
+}
+.mr-export-row span { color: var(--muted); }
+.mr-export-note {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.7;
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--line);
+}
+.mr-export-advice {
+  margin-top: 8px;
+  padding: 7px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--parchment);
+  background: rgba(242, 193, 78, 0.08);
+  border: 1px solid rgba(242, 193, 78, 0.35);
+}
+
 /* ============ Page manager ============ */
 .mr-pm-overlay {
   position: fixed;

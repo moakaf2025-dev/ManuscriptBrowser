@@ -1,6 +1,7 @@
 import {
   formatFolio, toggleSplitDoc, fitCanvasScale, createImageDoc,
   createOrderedDoc, defaultPageOrder, movePage,
+  extrapolateExportSize, recommendExportSettings, formatBytes,
 } from "../manuscriptDoc";
 
 describe("formatFolio", () => {
@@ -225,6 +226,46 @@ describe("page order", () => {
     expect(split.numPages).toBe(6); // 4 pages, first two split in half
     expect(split.resolve(1)).toEqual({ basePage: 1, split: true, side: 0 });
     expect((await ordered.getPage(1))._sourcePage).toBe(4);
+  });
+});
+
+describe("export size estimation", () => {
+  it("scales the average sampled page up to the whole document", () => {
+    const r = extrapolateExportSize([100000, 120000, 110000], 300);
+    expect(r.perPage).toBe(110000);
+    expect(r.estimate).toBe(110000 * 300);
+    expect(r.sampled).toBe(3);
+  });
+
+  it("trusts a document whose pages compress alike, and says so when they do not", () => {
+    expect(extrapolateExportSize([100000, 110000], 50).confidence).toBe("high");
+    expect(extrapolateExportSize([100000, 250000], 50).confidence).toBe("medium");
+    expect(extrapolateExportSize([50000, 900000], 50).confidence).toBe("low");
+  });
+
+  it("returns nothing rather than a made-up number when it has no samples", () => {
+    expect(extrapolateExportSize([], 100)).toBeNull();
+    expect(extrapolateExportSize([0, NaN], 100)).toBeNull();
+    expect(extrapolateExportSize([100000], 0)).toBeNull();
+  });
+
+  it("never recommends upscaling past the source", () => {
+    expect(recommendExportSettings(2200).maxSize).toBe(2200);
+    expect(recommendExportSettings(1000).maxSize).toBe(1200); // floor, still legible
+  });
+
+  it("caps very large scans where extra pixels stop buying legibility", () => {
+    const r = recommendExportSettings(6000);
+    expect(r.maxSize).toBe(3000);
+    expect(r.quality).toBe(88);
+    expect(r.reason).toContain("3000px");
+  });
+
+  it("formats sizes for reading", () => {
+    expect(formatBytes(0)).toBe("—");
+    expect(formatBytes(2048)).toBe("2.0 ك.ب");
+    expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 م.ب");
+    expect(formatBytes(1.5 * 1024 * 1024 * 1024)).toBe("1.5 ج.ب");
   });
 });
 

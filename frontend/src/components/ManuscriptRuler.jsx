@@ -54,6 +54,7 @@ import JSZip from "jszip";
 import {
   buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf, fitCanvasScale,
   FILTERED_MAX_PIXELS, createOrderedDoc, defaultPageOrder, movePage,
+  extrapolateExportSize, recommendExportSettings, formatBytes,
 } from "./manuscriptDoc";
 import { buildHeadingsDocument, buildCommentsDocument, toDocxBlob } from "./manuscriptExport";
 import { DEFAULT_RECIPE, RECIPE_PRESETS } from "./imageEnhance";
@@ -291,6 +292,9 @@ export default function ManuscriptRuler() {
   const [headingModal, setHeadingModal] = useState(null); // {editingId?, page, title, level}
   const [toast, setToast] = useState("");
   const [showManualImage, setShowManualImage] = useState(false);
+  const [exportEstimate, setExportEstimate] = useState(null);
+  const [estimating, setEstimating] = useState(false);
+  const [sourceFileSize, setSourceFileSize] = useState(0);
   // The page manager edits a working copy; nothing takes effect until "تطبيق".
   const [workingOrder, setWorkingOrder] = useState([]);
   const [pmDragIdx, setPmDragIdx] = useState(null);
@@ -503,6 +507,8 @@ export default function ManuscriptRuler() {
     setLoadingMsg("جارٍ فتح الملف…");
     try {
       const fileKey = `${file.name}|${file.size}|${file.lastModified || 0}`;
+      setSourceFileSize(file.size || 0);
+      setExportEstimate(null); // an estimate belongs to the file it was measured on
       const isArchive = /\.(zip|rar|7z|tar|tar\.gz|tgz|tar\.bz2)$/i.test(file.name);
       if (isArchive) setLoadingMsg("جارٍ فك ضغط الملف…");
       const baseD = await buildDocFromFile(file, { pdfjsLib, JSZip, splitPages: false });
@@ -1106,6 +1112,51 @@ export default function ManuscriptRuler() {
     } finally {
       setLoading(false);
       setLoadingMsg("جارٍ تحميل الصفحة…");
+    }
+  };
+
+  // ---------------- Export size estimate ----------------
+  // Encodes a few evenly spaced pages at the chosen settings and extrapolates.
+  // Slow enough to be on demand, honest enough to be worth the wait: it measures
+  // the same encoder the export itself uses rather than guessing from pixels.
+  const estimateExport = async () => {
+    if (!doc) return;
+    setEstimating(true);
+    try {
+      const total = pageCount;
+      const picks = [];
+      const wanted = Math.min(3, total);
+      for (let i = 0; i < wanted; i++) {
+        picks.push(Math.max(1, Math.round(((i + 0.5) * total) / wanted)));
+      }
+      const sizes = [];
+      let longestSide = 0;
+      for (const pageNum of picks) {
+        const page = await doc.getPage(pageNum);
+        const vp = page.getViewport({ scale: 1, rotation: 0 });
+        longestSide = Math.max(longestSide, vp.width, vp.height);
+        const targetScale = Math.min(2, state.exportMaxSize / Math.max(vp.width, vp.height));
+        const rvp = page.getViewport({ scale: targetScale, rotation: 0 });
+        const off = document.createElement("canvas");
+        off.width = Math.max(1, Math.floor(rvp.width));
+        off.height = Math.max(1, Math.floor(rvp.height));
+        const ctx = off.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, off.width, off.height);
+        await page.render({ canvasContext: ctx, viewport: rvp }).promise;
+        const blob = await new Promise((r) => off.toBlob(r, "image/jpeg", state.exportQuality / 100));
+        if (blob) sizes.push(blob.size);
+      }
+      setExportEstimate({
+        ...extrapolateExportSize(sizes, total),
+        settings: { maxSize: state.exportMaxSize, quality: state.exportQuality },
+        recommended: recommendExportSettings(longestSide),
+      });
+    } catch (e) {
+      console.error(e);
+      showToast("تعذّر تقدير الحجم");
+    } finally {
+      setEstimating(false);
     }
   };
 
@@ -3128,7 +3179,7 @@ export default function ManuscriptRuler() {
                 data-testid="mr-export-size"
               />
               <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-                للحصول على أعلى جودة، اترك القيمة عند 4000 أو أكثر.
+                أكبر من دقة المصوّرة الأصلية لا يضيف تفصيلاً — يكبّر الحجم فقط.
               </div>
             </div>
 
@@ -3140,6 +3191,60 @@ export default function ManuscriptRuler() {
                 onChange={(e) => setState((s) => ({ ...s, exportQuality: Number(e.target.value) }))}
                 data-testid="mr-export-quality"
               />
+            </div>
+
+            {/* Size, measured rather than guessed: a few pages are actually encoded
+                at the current settings and the rest extrapolated from them. */}
+            <div className="mr-export-size" data-testid="mr-export-estimate">
+              <div className="mr-export-row">
+                <span>حجم الملف الأصلي</span>
+                <b data-testid="mr-export-original">{formatBytes(sourceFileSize)}</b>
+              </div>
+              <div className="mr-export-row">
+                <span>الحجم بعد الضغط</span>
+                <b data-testid="mr-export-projected">
+                  {exportEstimate?.estimate ? formatBytes(exportEstimate.estimate) : "غير محسوب"}
+                </b>
+              </div>
+              {exportEstimate?.estimate && sourceFileSize > 0 && (
+                <div className="mr-export-row">
+                  <span>التوفير</span>
+                  <b style={{ color: exportEstimate.estimate < sourceFileSize ? "var(--amber)" : "#e07a5f" }}>
+                    {exportEstimate.estimate < sourceFileSize
+                      ? `− ${Math.round((1 - exportEstimate.estimate / sourceFileSize) * 100)}%`
+                      : `+ ${Math.round((exportEstimate.estimate / sourceFileSize - 1) * 100)}% (أكبر من الأصل)`}
+                  </b>
+                </div>
+              )}
+              {exportEstimate?.sampled && (
+                <div className="mr-export-note">
+                  تقدير من {exportEstimate.sampled} صفحات مضغوطة فعلياً · متوسط {formatBytes(exportEstimate.perPage)} للصفحة
+                  {exportEstimate.confidence === "low" && " · صفحات المخطوط متفاوتة كثيراً، فالرقم تقريبي"}
+                  {exportEstimate.confidence === "medium" && " · تفاوت متوسط بين الصفحات"}
+                </div>
+              )}
+              <div className="mr-pop-row" style={{ marginTop: 6 }}>
+                <button className="mr-btn" onClick={estimateExport} disabled={estimating || !doc} data-testid="mr-export-estimate-btn" style={{ flex: 1, justifyContent: "center" }}>
+                  {estimating ? "جارٍ القياس…" : "احسب الحجم المتوقع"}
+                </button>
+              </div>
+              {exportEstimate?.recommended && (
+                <div className="mr-export-advice" data-testid="mr-export-advice">
+                  <div><b>الموصى به:</b> {exportEstimate.recommended.maxSize}px · جودة {exportEstimate.recommended.quality}%</div>
+                  <div style={{ color: "var(--muted)", marginTop: 2 }}>{exportEstimate.recommended.reason}</div>
+                  <button
+                    className="mr-btn"
+                    style={{ width: "100%", justifyContent: "center", marginTop: 6 }}
+                    data-testid="mr-export-apply-advice"
+                    onClick={() => {
+                      setState((s) => ({ ...s, exportMaxSize: exportEstimate.recommended.maxSize, exportQuality: exportEstimate.recommended.quality }));
+                      setExportEstimate(null); // the old number described other settings
+                    }}
+                  >
+                    طبّق الموصى به
+                  </button>
+                </div>
+              )}
             </div>
 
             <div style={{ fontSize: 12, color: "var(--muted)", padding: "6px 8px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.6 }}>
