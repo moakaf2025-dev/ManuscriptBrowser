@@ -162,6 +162,41 @@ export function movePage(order, from, to) {
   return next;
 }
 
+// ------------------- Split geometry -------------------
+// A double page is rarely photographed square: the gutter usually leans a little.
+// The cut is therefore a line, not a column — x = fold + (y - h/2) * tan(angle) —
+// and each half is the region on one side of it.
+//
+// Because the line leans, a half is widest at one end. The returned width is that
+// widest extent and `offset` is where to place the base page inside it, so no ink
+// is clipped away at the corner where the half reaches furthest.
+export function splitGeometry(width, height, ratio, angleDeg, isRight) {
+  const r = Math.min(0.95, Math.max(0.05, Number.isFinite(ratio) ? ratio : 0.5));
+  const angle = Math.max(-20, Math.min(20, Number.isFinite(angleDeg) ? angleDeg : 0));
+  const fold = width * r;
+  const lean = (height / 2) * Math.tan((angle * Math.PI) / 180);
+  const foldMin = fold - Math.abs(lean);
+  const foldMax = fold + Math.abs(lean);
+
+  if (isRight) {
+    const w = Math.max(1, Math.min(width, width - foldMin));
+    return { width: w, offset: -Math.max(0, foldMin), fold, angle };
+  }
+  const w = Math.max(1, Math.min(width, foldMax));
+  return { width: w, offset: 0, fold, angle };
+}
+
+// Normalise a stored override. Older files hold a bare ratio; newer ones hold
+// {ratio, angle}. Both must keep working.
+export function normaliseFold(value) {
+  if (value == null) return null;
+  if (typeof value === "number") return { ratio: value, angle: 0 };
+  if (typeof value === "object" && Number.isFinite(value.ratio)) {
+    return { ratio: value.ratio, angle: Number.isFinite(value.angle) ? value.angle : 0 };
+  }
+  return null;
+}
+
 // ------------------- Splitting-doc wrapper -------------------
 // Given a base doc, produces a doc where pages within `range` are split into two,
 // and pages outside `range` remain single. RTL: right half first (recto), then left (verso).
@@ -246,20 +281,23 @@ function createSplittingDoc(baseDoc, opts = {}) {
         _isRight: isRight,
         getViewport: ({ scale = 1, rotation = 0 } = {}) => {
           // Always read the LATEST override at call-time (so slider updates take effect)
-          const latest = getOverride(basePage);
-          const effective = latest != null ? latest : foldRatio;
+          const latest = normaliseFold(getOverride(basePage));
+          const effective = latest ? latest.ratio : foldRatio;
+          const angle = latest ? latest.angle : 0;
           const bv = basePageObj.getViewport({ scale, rotation });
-          const w = isRight ? bv.width * (1 - effective) : bv.width * effective;
-          return { width: w, height: bv.height, scale, rotation };
+          const g = splitGeometry(bv.width, bv.height, effective, angle, isRight);
+          return { width: g.width, height: bv.height, scale, rotation };
         },
         render: ({ canvasContext, viewport }) => {
           return {
             promise: (async () => {
-              const latest = getOverride(basePage);
-              const effective = latest != null ? latest : foldRatio;
+              const latest = normaliseFold(getOverride(basePage));
+              const effective = latest ? latest.ratio : foldRatio;
+              const angle = latest ? latest.angle : 0;
               const { rotation = 0, scale } = viewport;
               const bv = basePageObj.getViewport({ scale, rotation });
-              const foldPx = bv.width * effective;
+              const g = splitGeometry(bv.width, bv.height, effective, angle, isRight);
+              const lean = (bv.height / 2) * Math.tan((g.angle * Math.PI) / 180);
               // Draw the base page straight onto the destination, shifted so that the
               // half we want starts at x=0; the other half falls outside the canvas
               // and is clipped for free.
@@ -272,7 +310,28 @@ function createSplittingDoc(baseDoc, opts = {}) {
               // draw multiply into the current transform, so translating first is
               // enough for pdf.js pages and image sequences alike.
               canvasContext.save();
-              canvasContext.translate(isRight ? -foldPx : 0, 0);
+              canvasContext.translate(g.offset, 0);
+              // Clip to the side of the leaning cut we want. The path is drawn in
+              // base-page coordinates because the translate above is already in
+              // effect, and it is extended well past the page on the far side so
+              // the half is never trimmed by the path itself.
+              const topX = g.fold - lean;
+              const botX = g.fold + lean;
+              const far = bv.width * 2;
+              canvasContext.beginPath();
+              if (isRight) {
+                canvasContext.moveTo(topX, 0);
+                canvasContext.lineTo(far, 0);
+                canvasContext.lineTo(far, bv.height);
+                canvasContext.lineTo(botX, bv.height);
+              } else {
+                canvasContext.moveTo(topX, 0);
+                canvasContext.lineTo(-far, 0);
+                canvasContext.lineTo(-far, bv.height);
+                canvasContext.lineTo(botX, bv.height);
+              }
+              canvasContext.closePath();
+              canvasContext.clip();
               await basePageObj.render({ canvasContext, viewport: bv }).promise;
               canvasContext.restore();
             })(),

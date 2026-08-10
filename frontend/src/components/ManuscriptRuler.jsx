@@ -54,7 +54,7 @@ import JSZip from "jszip";
 import {
   buildDocFromFile, toggleSplitDoc, formatFolio, exportDocAsPdf, fitCanvasScale,
   FILTERED_MAX_PIXELS, createOrderedDoc, defaultPageOrder, movePage,
-  extrapolateExportSize, recommendExportSettings, formatBytes,
+  extrapolateExportSize, recommendExportSettings, formatBytes, normaliseFold,
 } from "./manuscriptDoc";
 import { buildHeadingsDocument, buildCommentsDocument, toDocxBlob } from "./manuscriptExport";
 import { DEFAULT_RECIPE, RECIPE_PRESETS } from "./imageEnhance";
@@ -1414,10 +1414,12 @@ export default function ManuscriptRuler() {
   };
 
   // ---------------- Manual fold overrides ----------------
-  const setFoldRatio = (basePage, ratio) => {
+  // Stored as { ratio, angle }. Older files hold a bare number and normaliseFold
+  // keeps reading those, so nobody's saved cuts are lost.
+  const setFoldRatio = (basePage, fold) => {
     setFoldOverridesMap((m) => ({
       ...m,
-      [state.fileKey]: { ...(m[state.fileKey] || {}), [basePage]: ratio },
+      [state.fileKey]: { ...(m[state.fileKey] || {}), [basePage]: fold },
     }));
   };
 
@@ -3026,13 +3028,14 @@ export default function ManuscriptRuler() {
             {numberStep === 2 && state.splitPages && baseDoc && (() => {
               const activeBasePage = Math.ceil(state.page / 2);
               const overrides = foldOverridesMap[state.fileKey] || {};
-              const current = overrides[activeBasePage];
+              const current = normaliseFold(overrides[activeBasePage]);
               // Read auto-detected value from the doc's cache if no override yet
               let autoVal = 50;
               if (current == null && doc && doc._foldCache && doc._foldCache.has(activeBasePage)) {
                 autoVal = Math.round(doc._foldCache.get(activeBasePage) * 100);
               }
-              const displayVal = current != null ? Math.round(current * 100) : autoVal;
+              const displayVal = current != null ? Math.round(current.ratio * 100) : autoVal;
+              const displayAngle = current != null ? current.angle : 0;
               return (
                 <div className="mr-field">
                   <label>
@@ -3043,12 +3046,29 @@ export default function ManuscriptRuler() {
                     type="range" min="10" max="90" step="0.5" value={displayVal}
                     onChange={(e) => {
                       const v = Number(e.target.value) / 100;
-                      setFoldRatio(activeBasePage, v);
+                      setFoldRatio(activeBasePage, { ratio: v, angle: displayAngle });
                       // Force re-render so getViewport/render read the new override
                       if (renderPageRef.current) renderPageRef.current(state.page);
                     }}
                     data-testid="mr-fold-manual"
                   />
+
+                  {/* A gutter is rarely square to the lens. The cut follows this
+                      angle instead of running straight down the page. */}
+                  <label style={{ marginTop: 6, display: "block" }}>
+                    ميل خط القص
+                    <span className="val">{displayAngle > 0 ? "+" : ""}{displayAngle}°</span>
+                  </label>
+                  <input
+                    type="range" min="-15" max="15" step="0.5" value={displayAngle}
+                    onChange={(e) => {
+                      const a = Number(e.target.value);
+                      setFoldRatio(activeBasePage, { ratio: displayVal / 100, angle: a });
+                      if (renderPageRef.current) renderPageRef.current(state.page);
+                    }}
+                    data-testid="mr-fold-angle"
+                  />
+
                   <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                     <button
                       className="mr-btn"

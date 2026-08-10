@@ -2,6 +2,7 @@ import {
   formatFolio, toggleSplitDoc, fitCanvasScale, createImageDoc,
   createOrderedDoc, defaultPageOrder, movePage,
   extrapolateExportSize, recommendExportSettings, formatBytes,
+  splitGeometry, normaliseFold,
 } from "../manuscriptDoc";
 
 describe("formatFolio", () => {
@@ -226,6 +227,58 @@ describe("page order", () => {
     expect(split.numPages).toBe(6); // 4 pages, first two split in half
     expect(split.resolve(1)).toEqual({ basePage: 1, split: true, side: 0 });
     expect((await ordered.getPage(1))._sourcePage).toBe(4);
+  });
+});
+
+describe("angled split geometry", () => {
+  it("splits at the ratio when the gutter is square", () => {
+    const right = splitGeometry(1000, 800, 0.5, 0, true);
+    const left = splitGeometry(1000, 800, 0.5, 0, false);
+    expect(right.width).toBe(500);
+    expect(left.width).toBe(500);
+    expect(right.offset).toBe(-500);
+    expect(left.offset).toBe(0);
+  });
+
+  it("honours an off-centre fold", () => {
+    expect(splitGeometry(1000, 800, 0.4, 0, false).width).toBe(400);
+    expect(splitGeometry(1000, 800, 0.4, 0, true).width).toBe(600);
+  });
+
+  it("widens each half to cover the end the leaning cut reaches furthest", () => {
+    // 800px tall at 10 degrees leans 400*tan(10) ~= 70px each way
+    const lean = 400 * Math.tan((10 * Math.PI) / 180);
+    const right = splitGeometry(1000, 800, 0.5, 10, true);
+    const left = splitGeometry(1000, 800, 0.5, 10, false);
+    expect(right.width).toBeCloseTo(500 + lean, 1);
+    expect(left.width).toBeCloseTo(500 + lean, 1);
+    // together they overlap rather than lose the wedge between them
+    expect(right.width + left.width).toBeGreaterThan(1000);
+  });
+
+  it("leans the same amount whichever way the page tilts", () => {
+    expect(splitGeometry(1000, 800, 0.5, 7, true).width)
+      .toBeCloseTo(splitGeometry(1000, 800, 0.5, -7, true).width, 6);
+  });
+
+  it("never asks for more than the page or less than a pixel", () => {
+    expect(splitGeometry(1000, 4000, 0.5, 20, true).width).toBeLessThanOrEqual(1000);
+    expect(splitGeometry(1000, 4000, 0.05, 20, false).width).toBeGreaterThanOrEqual(1);
+  });
+
+  it("clamps a silly ratio or angle instead of producing a broken page", () => {
+    expect(splitGeometry(1000, 800, 5, 0, false).width).toBe(950);
+    expect(splitGeometry(1000, 800, -3, 0, false).width).toBe(50);
+    expect(splitGeometry(1000, 800, 0.5, 999, true).angle).toBe(20);
+    expect(splitGeometry(1000, 800, NaN, NaN, true).width).toBe(500);
+  });
+
+  it("reads both the old bare-ratio overrides and the new ones with an angle", () => {
+    expect(normaliseFold(0.42)).toEqual({ ratio: 0.42, angle: 0 });
+    expect(normaliseFold({ ratio: 0.42, angle: -6 })).toEqual({ ratio: 0.42, angle: -6 });
+    expect(normaliseFold({ ratio: 0.42 })).toEqual({ ratio: 0.42, angle: 0 });
+    expect(normaliseFold(null)).toBeNull();
+    expect(normaliseFold({ nonsense: 1 })).toBeNull();
   });
 });
 
