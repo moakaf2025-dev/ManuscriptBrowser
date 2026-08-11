@@ -135,8 +135,11 @@ function createWindow() {
     return { action: "deny" };
   });
 
+  // Every close is intercepted once, to run the backup check; the actual
+  // teardown at the end of handleCloseRequest is win.destroy(), which does not
+  // re-emit "close" - so this never needs to tell its own request apart from a
+  // real one, and nothing here can double-fire.
   win.on("close", (event) => {
-    if (win.__msForceClose) return; // this is the close we asked for; let it happen
     event.preventDefault();
     handleCloseRequest(win);
   });
@@ -155,31 +158,69 @@ function createWindow() {
 // frame.executeJavaScript, not an IPC round trip: main already has a direct line
 // into each frame's main world regardless of contextIsolation, and the check is
 // narrow enough that adding a channel for it would only be more to keep in sync.
+//
+// Bounded by a timeout, and this is not defensive padding: executeJavaScript
+// waits on the renderer's main thread, and that thread is exactly what a heavy
+// page render or an in-progress export keeps busy. Before this reminder existed,
+// clicking close never depended on the renderer being free - Electron just tore
+// the window down. Making every close await a script that can stay queued
+// behind real work turns "the renderer is doing something" into "the window
+// will not close", which is worse than no reminder at all. Timing out and
+// treating that pane as clean (not dirty) preserves the old guarantee: close
+// always closes, the reminder is a best-effort addition on top of it.
+//
+// The timeout alone is not enough, though: win.close() itself waits on the
+// renderer too, for its own unload lifecycle, regardless of anything decided
+// here. Measured directly - a pane wedged in an unbounded `while(true){}` at
+// the moment of close never finished closing through win.close(), timeout or
+// not. win.destroy() is what actually finishes the job: Electron documents it
+// as skipping unload/beforeunload and the "close" event entirely, which is
+// exactly the point once this function has already decided closing is safe -
+// there is nothing left for the page's own lifecycle to do.
+const PANE_CHECK_TIMEOUT_MS = 1500;
+const PANE_BACKUP_TIMEOUT_MS = 4000; // the pane's own ack already waits ~400ms
+
+function withTimeout(promise, ms, fallback) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      () => { clearTimeout(timer); resolve(fallback); }
+    );
+  });
+}
+
 async function paneIsDirty(frame) {
-  try {
-    return !!(await frame.executeJavaScript("(window.__msBackupDirty ? window.__msBackupDirty() : false)"));
-  } catch {
-    return false; // a frame mid-navigation or gone should not block a close
-  }
+  const result = await withTimeout(
+    frame.executeJavaScript("(window.__msBackupDirty ? window.__msBackupDirty() : false)").catch(() => false),
+    PANE_CHECK_TIMEOUT_MS,
+    false // a frame mid-navigation, gone, or too busy to answer should not block a close
+  );
+  return !!result;
 }
 
 async function runPaneBackup(frame) {
-  try {
-    await frame.executeJavaScript("(window.__msRunBackupThenAck ? window.__msRunBackupThenAck() : Promise.resolve(false))");
-  } catch { /* the pane's own toast already reports a failure inside it */ }
+  await withTimeout(
+    frame.executeJavaScript("(window.__msRunBackupThenAck ? window.__msRunBackupThenAck() : Promise.resolve(false))").catch(() => false),
+    PANE_BACKUP_TIMEOUT_MS,
+    false // the pane's own toast already reports a failure inside it; the close must still proceed
+  );
 }
 
 async function handleCloseRequest(win) {
   if (win.isDestroyed()) return;
+  // In parallel, not one frame at a time: same-origin panes share a renderer
+  // process, so a wedged pane's main thread also blocks executeJavaScript calls
+  // aimed at every other frame in that same window - main frame included.
+  // Starting all the timeouts together caps the wait at the slowest one, not
+  // their sum; sequentially it was the sum, measured at ~3s for two frames
+  // against ~1.5s for either alone.
   const frames = win.webContents.mainFrame.framesInSubtree;
-  const dirtyFrames = [];
-  for (const frame of frames) {
-    if (await paneIsDirty(frame)) dirtyFrames.push(frame);
-  }
+  const dirtyResults = await Promise.all(frames.map((frame) => paneIsDirty(frame)));
+  const dirtyFrames = frames.filter((_frame, i) => dirtyResults[i]);
 
   if (dirtyFrames.length === 0) {
-    win.__msForceClose = true;
-    win.close();
+    win.destroy();
     return;
   }
 
@@ -197,12 +238,13 @@ async function handleCloseRequest(win) {
   if (choice === 2 || win.isDestroyed()) return; // إلغاء: leave the window open
 
   if (choice === 0) {
-    for (const frame of dirtyFrames) await runPaneBackup(frame);
+    // In parallel for the same reason as the dirty check above - one dirty pane
+    // stuck under a timeout should not delay the other pane's backup behind it.
+    await Promise.all(dirtyFrames.map((frame) => runPaneBackup(frame)));
   }
 
   if (win.isDestroyed()) return;
-  win.__msForceClose = true;
-  win.close();
+  win.destroy();
 }
 
 // ---- IPC handlers for global screen capture + saving ----
