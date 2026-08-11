@@ -2087,7 +2087,7 @@ export default function ManuscriptRuler() {
       <div className="mr-topbar mr-topbar-v2" data-testid="mr-topbar">
         <div className="mr-brand">
           <img src={`${process.env.PUBLIC_URL || "."}/app-icon.png`} alt="M" className="mr-brand-mark" />
-          <div className="mr-brand-name">متصفح المخطوطات</div>
+          <div className="mr-brand-name">متصفح المخطوطات <span className="mr-brand-ver">إصدار 2</span></div>
         </div>
 
         {/* 1. فتح المخطوط */}
@@ -2317,6 +2317,26 @@ export default function ManuscriptRuler() {
               )}
             </div>
           )}
+        </div>
+
+        {/* Page order sits immediately before numbering, which is the order the
+            work happens in: put the sheets right, then number them. */}
+        <div className="mr-group">
+          <button
+            className={`mr-gbtn ${showPageManager ? "mr-gbtn-active" : ""}`}
+            onClick={() => {
+              if (!hasFile) return;
+              // Seed the working copy from whatever order is in force right now.
+              setWorkingOrder(currentOrder ? [...currentOrder] : defaultPageOrder(sourcePageCount));
+              setShowPageManager(true);
+            }}
+            disabled={!hasFile}
+            data-testid="mr-btn-page-manager"
+            title="ترتيب الصفحات: نقل وإخفاء واسترجاع قبل الترقيم"
+          >
+            <LayoutGrid size={22} />
+            <span>ترتيب</span>
+          </button>
         </div>
 
         {/* 4. ترقيم المخطوط */}
@@ -2552,29 +2572,9 @@ export default function ManuscriptRuler() {
           {isFs ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
         </button>
 
-        <button
-          className={`mr-btn mr-btn-icon ${showPageManager ? "mr-btn-active" : ""}`}
-          onClick={() => {
-            if (!hasFile) return;
-            // Seed the working copy from whatever order is in force right now.
-            setWorkingOrder(currentOrder ? [...currentOrder] : defaultPageOrder(sourcePageCount));
-            setShowPageManager(true);
-          }}
-          disabled={!hasFile}
-          title="ترتيب الصفحات (نقل / إخفاء / استرجاع)"
-          data-testid="mr-btn-page-manager"
-        >
-          <LayoutGrid size={18} />
-        </button>
-
-        <button
-          className="mr-btn mr-btn-icon"
-          onClick={() => setShowShortcuts(true)}
-          title="اختصارات لوحة المفاتيح (؟)"
-          data-testid="mr-btn-shortcuts"
-        >
-          <Keyboard size={18} />
-        </button>
+        {/* The shortcut list used to have a button here. It is still one keystroke
+            away on "؟", and is listed in the about box, so the toolbar does not
+            need to carry it. */}
 
         <button
           className="mr-btn mr-btn-icon"

@@ -30,7 +30,7 @@ function createWindow() {
     minHeight: 480,
     backgroundColor: "#1a1613",
     autoHideMenuBar: true,
-    title: "متصفح المخطوطات",
+    title: "متصفح المخطوطات — إصدار 2",
     icon: nativeImage.createFromPath(iconPath),
     webPreferences: {
       contextIsolation: true,

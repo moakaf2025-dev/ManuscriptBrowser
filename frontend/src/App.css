@@ -1154,6 +1154,16 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   max-height: 70vh;
   overflow-y: auto;
 }
+.mr-brand-ver {
+  font-size: 11px;
+  color: var(--amber);
+  border: 1px solid var(--amber-2, var(--line));
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-inline-start: 6px;
+  vertical-align: middle;
+}
+
 .mr-popover-wide { min-width: 320px; }
 
 /* The browse and ruler panels are long lists of sliders, not short menus. Hung
