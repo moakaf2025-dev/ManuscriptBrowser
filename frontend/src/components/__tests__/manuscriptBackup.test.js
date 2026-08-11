@@ -1,4 +1,4 @@
-import { buildBackup, parseBackup, mergeInto, summarise, BACKUP_FORMAT, BACKUP_KEYS } from "../manuscriptBackup";
+import { buildBackup, parseBackup, mergeInto, summarise, BACKUP_FORMAT, BACKUP_KEYS, backupContentHash, hasBackupWorthyContent } from "../manuscriptBackup";
 
 const store = {
   "manuscriptRulerComments.v1": JSON.stringify({
@@ -94,5 +94,57 @@ describe("merging a restore into existing work", () => {
 describe("summarise", () => {
   it("counts nothing for an empty backup", () => {
     expect(summarise({})).toEqual({ manuscripts: 0, comments: 0, headings: 0 });
+  });
+});
+
+describe("hasBackupWorthyContent", () => {
+  it("is false for a backup with nothing in it", () => {
+    expect(hasBackupWorthyContent({})).toBe(false);
+  });
+
+  it("is false when every recorded key is empty", () => {
+    expect(hasBackupWorthyContent({
+      "manuscriptRulerComments.v1": {},
+      "manuscriptRulerBookmarks.v1": [],
+    })).toBe(false);
+  });
+
+  it("is true once a comment exists", () => {
+    expect(hasBackupWorthyContent(buildBackup(read).data)).toBe(true);
+  });
+
+  it("ignores state, recents, auto-bookmark and per-file settings", () => {
+    // These rewrite themselves on nearly every page turn; keying the close-time
+    // reminder off them would nag on every session regardless of whether the
+    // reader wrote a single word.
+    const noisy = {
+      "manuscriptRulerState.v1": { page: 12, zoomIdx: 3 },
+      "manuscriptRulerRecents.v1": [{ fileKey: "a", name: "a.pdf" }],
+      "manuscriptRulerAutoBM.v1": { "a|1|1": { page: 5 } },
+      "manuscriptRulerPerFileSettings.v1": { "a|1|1": { brightness: 80 } },
+    };
+    expect(hasBackupWorthyContent(noisy)).toBe(false);
+  });
+});
+
+describe("backupContentHash", () => {
+  it("is stable for the same reminder-relevant content", () => {
+    const data = buildBackup(read).data;
+    expect(backupContentHash(data)).toBe(backupContentHash(data));
+  });
+
+  it("changes when a comment is added", () => {
+    const before = backupContentHash(buildBackup(read).data);
+    const after = backupContentHash(buildBackup((k) => (k === "manuscriptRulerComments.v1"
+      ? JSON.stringify({ "new|1|1": [{ id: "c9", page: 1, text: "جديد" }] })
+      : read(k))).data);
+    expect(after).not.toBe(before);
+  });
+
+  it("does not change when only state, recents or per-file settings change", () => {
+    const withExtras = (extra) => buildBackup((k) => (Object.prototype.hasOwnProperty.call(extra, k) ? extra[k] : read(k))).data;
+    const a = backupContentHash(withExtras({ "manuscriptRulerState.v1": JSON.stringify({ page: 1 }) }));
+    const b = backupContentHash(withExtras({ "manuscriptRulerState.v1": JSON.stringify({ page: 99 }) }));
+    expect(a).toBe(b);
   });
 });

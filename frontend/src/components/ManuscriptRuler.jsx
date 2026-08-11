@@ -58,7 +58,7 @@ import {
 } from "./manuscriptDoc";
 import { buildHeadingsDocument, buildCommentsDocument, toDocxBlob } from "./manuscriptExport";
 import { DEFAULT_RECIPE, RECIPE_PRESETS } from "./imageEnhance";
-import { buildBackup, parseBackup, mergeInto } from "./manuscriptBackup";
+import { buildBackup, parseBackup, mergeInto, backupContentHash, hasBackupWorthyContent } from "./manuscriptBackup";
 import { enhancePixels } from "./enhanceClient";
 import {
   BookmarkModal, InfoEditorModal, HeadingModal, CommentModal,
@@ -210,6 +210,10 @@ const LARGE_FILE_BYTES = 500 * 1024 * 1024;
 
 const RECENTS_KEY = "manuscriptRulerRecents.v1" + _NS_SUFFIX;
 const AUTO_BM_KEY = "manuscriptRulerAutoBM.v1" + _NS_SUFFIX;
+// What a backup looked like the last time one was actually saved from this pane -
+// compared against the current content to decide whether the close-time reminder
+// has anything to say.
+const BACKUP_HASH_KEY = "manuscriptRulerBackupHash.v1" + _NS_SUFFIX;
 const PER_FILE_SETTINGS_KEY = "manuscriptRulerPerFileSettings.v1" + _NS_SUFFIX;
 
 // State fields remembered per manuscript and restored the next time it is opened.
@@ -1220,6 +1224,9 @@ export default function ManuscriptRuler() {
       a.download = `نسخة احتياطية - متصفح المخطوطات - ${stamp}.json`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 5000);
+      // Marks this content as covered, so the close-time reminder stays quiet
+      // until something actually changes again.
+      localStorage.setItem(BACKUP_HASH_KEY, backupContentHash(payload.data));
       const s = payload.summary;
       showToast(`حُفظت نسخة احتياطية: ${s.manuscripts} مخطوطاً · ${s.comments} تعليقاً`);
     } catch (e) {
@@ -1227,6 +1234,42 @@ export default function ManuscriptRuler() {
       showToast("تعذّر حفظ النسخة الاحتياطية");
     }
   };
+
+  // Lets main.js ask, from outside React, whether this pane has anything unbacked
+  // up, and trigger a backup, when the window is about to close. Plain window
+  // globals rather than the msElectron bridge: main reaches them directly through
+  // frame.executeJavaScript, which runs in this document's own main world
+  // regardless of contextIsolation, so no IPC channel is needed for a call this
+  // narrow.
+  //
+  // Deliberately mount-only. backupAll reads localStorage fresh on every call and
+  // showToast only calls a stable setState — neither closes over render-time
+  // state — so capturing them once at mount does not go stale.
+  useEffect(() => {
+    window.__msBackupDirty = () => {
+      try {
+        const payload = buildBackup((key) => localStorage.getItem(key + _NS_SUFFIX));
+        if (!hasBackupWorthyContent(payload.data)) return false;
+        const saved = localStorage.getItem(BACKUP_HASH_KEY);
+        return backupContentHash(payload.data) !== saved;
+      } catch {
+        return false; // never hold up a close over a broken check
+      }
+    };
+    window.__msRunBackupThenAck = () => {
+      try {
+        backupAll();
+      } catch { /* backupAll already reports its own failure */ }
+      // The download is fire-and-forget from here; give Electron a moment to
+      // pick it up before main proceeds with the close.
+      return new Promise((resolve) => setTimeout(() => resolve(true), 400));
+    };
+    return () => {
+      delete window.__msBackupDirty;
+      delete window.__msRunBackupThenAck;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const restoreAll = async (file) => {
     if (!file) return;

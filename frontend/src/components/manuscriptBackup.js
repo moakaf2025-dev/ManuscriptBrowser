@@ -25,6 +25,22 @@ export const BACKUP_KEYS = [
   "manuscriptRulerPerFileSettings.v1",
 ];
 
+// The subset that decides whether a close-time reminder has anything to say.
+// Bookmarks, comments, headings, catalogue entries, fold adjustments and page
+// orders are deliberate work a reader would mind losing. State, recents,
+// auto-bookmark and per-file display settings are still in the backup file
+// above — restoring them is convenient — but they rewrite themselves on
+// practically every page turn, so keying a reminder off them would nag on every
+// session regardless of whether the reader wrote a single word.
+const REMINDER_KEYS = [
+  "manuscriptRulerBookmarks.v1",
+  "manuscriptRulerComments.v1",
+  "manuscriptRulerInfo.v1",
+  "manuscriptRulerHeadings.v1",
+  "manuscriptRulerFoldOverrides.v1",
+  "manuscriptRulerPageOrder.v1",
+];
+
 // Count the manuscripts represented, so the reader can see the backup is not empty
 // and can tell one backup file from another.
 export function summarise(data) {
@@ -43,6 +59,55 @@ export function summarise(data) {
     comments: countEntries("manuscriptRulerComments.v1"),
     headings: countEntries("manuscriptRulerHeadings.v1"),
   };
+}
+
+// A cheap way to notice "does this differ from the last backup", so a reminder
+// can fire at session end without hooking every place that writes a bookmark, a
+// comment, a heading or a page order. Recomputed on demand instead of tracked
+// continuously - nothing about how those are saved day to day changes. Not
+// cryptographic: a collision here would only mean an occasional missed reminder,
+// never a corrupted backup, since the restore path never touches this.
+function hashJSON(value) {
+  const str = JSON.stringify(value);
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = (h * 33) ^ str.charCodeAt(i);
+  return (h >>> 0).toString(36) + ":" + str.length;
+}
+
+// Only the keys a reminder should key off, in case `data` is a full backup
+// payload (which also carries state/recents/auto-bookmark/per-file settings that
+// rewrite themselves on nearly every page turn - hashing those would make the
+// reminder fire every session regardless of whether real work happened).
+function reminderSnapshot(data) {
+  const snap = {};
+  for (const key of REMINDER_KEYS) if (data[key] != null) snap[key] = data[key];
+  return snap;
+}
+
+export function backupContentHash(data) {
+  return hashJSON(reminderSnapshot(data));
+}
+
+// True once there is at least one bookmark, comment, heading, catalogue entry,
+// fold override or page order recorded - something a reminder would actually be
+// protecting. A key can exist with nothing in it (the last bookmark on a page
+// got deleted, leaving behind an empty array), so presence of the key is not
+// enough; the value has to hold something.
+export function hasBackupWorthyContent(data) {
+  for (const key of REMINDER_KEYS) {
+    const v = data[key];
+    if (v == null) continue;
+    if (Array.isArray(v)) {
+      if (v.length > 0) return true;
+      continue;
+    }
+    if (typeof v === "object") {
+      if (Object.keys(v).length > 0) return true;
+      continue;
+    }
+    if (v) return true;
+  }
+  return false;
 }
 
 export function buildBackup(readKey) {

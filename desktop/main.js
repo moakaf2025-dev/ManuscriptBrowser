@@ -134,6 +134,75 @@ function createWindow() {
     shell.openExternal(url);
     return { action: "deny" };
   });
+
+  win.on("close", (event) => {
+    if (win.__msForceClose) return; // this is the close we asked for; let it happen
+    event.preventDefault();
+    handleCloseRequest(win);
+  });
+}
+
+// ---- Reminding the reader to back up before losing a session's work ----
+//
+// Comments, headings, catalogue cards and page orders live only in this
+// machine's localStorage until the reader exports a backup by hand - there is no
+// autosave to another location. So before the window actually closes, every
+// pane is asked whether it holds anything not covered by its last backup
+// (window.__msBackupDirty, a plain global the pane exposes for exactly this -
+// see ManuscriptRuler.jsx). If any pane says yes, closing pauses for a native
+// prompt instead of the window just disappearing over unsaved annotations.
+//
+// frame.executeJavaScript, not an IPC round trip: main already has a direct line
+// into each frame's main world regardless of contextIsolation, and the check is
+// narrow enough that adding a channel for it would only be more to keep in sync.
+async function paneIsDirty(frame) {
+  try {
+    return !!(await frame.executeJavaScript("(window.__msBackupDirty ? window.__msBackupDirty() : false)"));
+  } catch {
+    return false; // a frame mid-navigation or gone should not block a close
+  }
+}
+
+async function runPaneBackup(frame) {
+  try {
+    await frame.executeJavaScript("(window.__msRunBackupThenAck ? window.__msRunBackupThenAck() : Promise.resolve(false))");
+  } catch { /* the pane's own toast already reports a failure inside it */ }
+}
+
+async function handleCloseRequest(win) {
+  if (win.isDestroyed()) return;
+  const frames = win.webContents.mainFrame.framesInSubtree;
+  const dirtyFrames = [];
+  for (const frame of frames) {
+    if (await paneIsDirty(frame)) dirtyFrames.push(frame);
+  }
+
+  if (dirtyFrames.length === 0) {
+    win.__msForceClose = true;
+    win.close();
+    return;
+  }
+
+  const choice = dialog.showMessageBoxSync(win, {
+    type: "question",
+    buttons: ["حفظ نسخة ثم إغلاق", "إغلاق دون حفظ", "إلغاء"],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
+    title: "نسخة احتياطية",
+    message: "لديك تعديلات لم تُحفظ في نسخة احتياطية منذ آخر مرة.",
+    detail: "الحواشي والعناوين وبطاقات الكتب وترتيب الصفحات محفوظة على هذا الجهاز فقط. يُنصح بحفظ نسخة احتياطية قبل الإغلاق حتى لا تفقدها.",
+  });
+
+  if (choice === 2 || win.isDestroyed()) return; // إلغاء: leave the window open
+
+  if (choice === 0) {
+    for (const frame of dirtyFrames) await runPaneBackup(frame);
+  }
+
+  if (win.isDestroyed()) return;
+  win.__msForceClose = true;
+  win.close();
 }
 
 // ---- IPC handlers for global screen capture + saving ----
