@@ -8,6 +8,19 @@ contextBridge.exposeInMainWorld("msElectron", {
     } catch { return ""; }
   },
 
+  // A manuscript handed to the program on the command line, as "Open with" does.
+  // Taking it clears it, so of the two panes only the one that asks first gets a
+  // given path and the file is not opened twice.
+  takePendingOpenPath: () => ipcRenderer.invoke("ms:take-pending-open-path"),
+
+  // Fired when a later launch hands this instance a file. The path is not in the
+  // event: call takePendingOpenPath to claim it. Returns an unsubscribe function.
+  onOpenPathAvailable: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("ms:open-path-available", handler);
+    return () => ipcRenderer.removeListener("ms:open-path-available", handler);
+  },
+
   // Copy an image (as data-URL) to the OS clipboard via the main process.
   // Required because `navigator.clipboard.write` is disabled on file:// origins,
   // and the `clipboard` module is only available in the main process.
