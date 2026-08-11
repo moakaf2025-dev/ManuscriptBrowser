@@ -1271,6 +1271,25 @@ export default function ManuscriptRuler() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Whether the currently open tab is showing the split (double-page) view.
+  // Unlike backupAll above, this genuinely depends on render-time state, so it
+  // is kept live by reassigning on every change rather than captured once at
+  // mount - a stale closure here would just report whatever splitPages was when
+  // the pane first loaded.
+  //
+  // splitPages always starts false when a file is (re)opened - by design, so
+  // switching files never carries someone else's split range into a new
+  // manuscript - and nothing persists it. A reader who spent time fitting the
+  // fold line page by page and then closes without exporting loses none of that
+  // fine-tuning itself (foldOverridesMap is keyed by file and is part of the
+  // backup), but does lose the toggle being on, which reads as "my split is
+  // gone" even though re-enabling it would bring the fitted lines right back.
+  // The close-time reminder speaks to the visible loss, not the technicality.
+  useEffect(() => {
+    window.__msSplitActive = () => !!state.splitPages;
+    return () => { delete window.__msSplitActive; };
+  }, [state.splitPages]);
+
   const restoreAll = async (file) => {
     if (!file) return;
     try {
@@ -3215,6 +3234,15 @@ export default function ManuscriptRuler() {
                     <input type="checkbox" checked={state.splitPages} onChange={toggleSplit} data-testid="mr-num-split-toggle" style={{ accentColor: "var(--amber)" }} />
                   </label>
                 </div>
+                {state.splitPages && (
+                  <div
+                    data-testid="mr-split-not-saved-notice"
+                    style={{ fontSize: 12, color: "var(--parchment-soft)", padding: "8px 10px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--amber)", lineHeight: 1.7 }}
+                  >
+                    ⚠ هذا التقسيم للعرض فقط، ولا يُحفظ عند إغلاق الملف أو البرنامج — يبدأ كل ملف مغلقًا عند فتحه من جديد.
+                    إن أردت الاحتفاظ بالمخطوط مُقسَّمًا بشكل نهائي، فصدّره الآن من زر «تصدير» أدناه قبل إغلاق البرنامج، حتى لا يضيع جهد ضبط القص.
+                  </div>
+                )}
                 <div className="mr-field">
                   <label>ابدأ التقسيم من صفحة <span className="val">{state.splitFrom}</span></label>
                   <input type="number" min="1" value={state.splitFrom}

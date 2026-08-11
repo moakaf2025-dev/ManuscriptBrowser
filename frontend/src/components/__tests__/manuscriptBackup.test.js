@@ -113,6 +113,20 @@ describe("hasBackupWorthyContent", () => {
     expect(hasBackupWorthyContent(buildBackup(read).data)).toBe(true);
   });
 
+  it("ignores a catalogue card that only has its auto-filled number and type", () => {
+    // Opening any file writes exactly this - type: "single" plus number/library
+    // parsed from the filename - before the reader has typed a single word.
+    expect(hasBackupWorthyContent({
+      "manuscriptRulerInfo.v1": { "big.pdf|1|1": { type: "single", number: "big", library: "", title: "", author: "", copyist: "", copyDate: "", titlesList: "", notes: "" } },
+    })).toBe(false);
+  });
+
+  it("counts a catalogue card once the reader types a title", () => {
+    expect(hasBackupWorthyContent({
+      "manuscriptRulerInfo.v1": { "big.pdf|1|1": { type: "single", number: "big", library: "", title: "شرح الورقات", author: "", copyist: "", copyDate: "", titlesList: "", notes: "" } },
+    })).toBe(true);
+  });
+
   it("ignores state, recents, auto-bookmark and per-file settings", () => {
     // These rewrite themselves on nearly every page turn; keying the close-time
     // reminder off them would nag on every session regardless of whether the

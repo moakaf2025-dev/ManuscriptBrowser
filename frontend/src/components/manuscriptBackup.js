@@ -74,13 +74,36 @@ function hashJSON(value) {
   return (h >>> 0).toString(36) + ":" + str.length;
 }
 
+// A catalogue card is auto-filled with `type: "single"` and, where the filename
+// carries them, `number` and `library` - the moment a file is opened, before the
+// reader has typed anything. Only the fields nobody fills in automatically say
+// anything about deliberate work.
+function meaningfulInfoFields(info) {
+  const { title, author, copyist, copyDate, titlesList, notes } = info || {};
+  return { title, author, copyist, copyDate, titlesList, notes };
+}
+
 // Only the keys a reminder should key off, in case `data` is a full backup
 // payload (which also carries state/recents/auto-bookmark/per-file settings that
 // rewrite themselves on nearly every page turn - hashing those would make the
-// reminder fire every session regardless of whether real work happened).
+// reminder fire every session regardless of whether real work happened). Catalogue
+// entries get the further trim above: opening any file already leaves one behind.
 function reminderSnapshot(data) {
   const snap = {};
-  for (const key of REMINDER_KEYS) if (data[key] != null) snap[key] = data[key];
+  for (const key of REMINDER_KEYS) {
+    const v = data[key];
+    if (v == null) continue;
+    if (key === "manuscriptRulerInfo.v1" && typeof v === "object") {
+      const trimmed = {};
+      for (const [fileKey, info] of Object.entries(v)) {
+        const meaningful = meaningfulInfoFields(info);
+        if (Object.values(meaningful).some(Boolean)) trimmed[fileKey] = meaningful;
+      }
+      if (Object.keys(trimmed).length > 0) snap[key] = trimmed;
+      continue;
+    }
+    snap[key] = v;
+  }
   return snap;
 }
 
@@ -88,14 +111,16 @@ export function backupContentHash(data) {
   return hashJSON(reminderSnapshot(data));
 }
 
-// True once there is at least one bookmark, comment, heading, catalogue entry,
-// fold override or page order recorded - something a reminder would actually be
-// protecting. A key can exist with nothing in it (the last bookmark on a page
-// got deleted, leaving behind an empty array), so presence of the key is not
-// enough; the value has to hold something.
+// True once there is at least one bookmark, comment, heading, catalogue field the
+// reader actually typed, fold override or page order recorded - something a
+// reminder would actually be protecting. A key can exist with nothing in it (the
+// last bookmark on a page got deleted, leaving behind an empty array; a card
+// left with only its auto-filled number), so presence of the key is not enough;
+// the value has to hold something a reader put there on purpose.
 export function hasBackupWorthyContent(data) {
+  const snap = reminderSnapshot(data);
   for (const key of REMINDER_KEYS) {
-    const v = data[key];
+    const v = snap[key];
     if (v == null) continue;
     if (Array.isArray(v)) {
       if (v.length > 0) return true;

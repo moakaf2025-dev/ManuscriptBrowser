@@ -199,6 +199,22 @@ async function paneIsDirty(frame) {
   return !!result;
 }
 
+// Split (double-page) view never survives closing the file - splitPages starts
+// false every time a manuscript (re)opens, by design, so switching files never
+// carries one manuscript's split range into another. The fold-line fitting
+// itself is not lost (foldOverridesMap is keyed by file and is part of the
+// backup), only the toggle being on - but that reads as "my split is gone" to
+// whoever spent time getting it right, so it gets its own notice rather than
+// being folded silently into the backup one.
+async function paneSplitActive(frame) {
+  const result = await withTimeout(
+    frame.executeJavaScript("(window.__msSplitActive ? window.__msSplitActive() : false)").catch(() => false),
+    PANE_CHECK_TIMEOUT_MS,
+    false
+  );
+  return !!result;
+}
+
 async function runPaneBackup(frame) {
   await withTimeout(
     frame.executeJavaScript("(window.__msRunBackupThenAck ? window.__msRunBackupThenAck() : Promise.resolve(false))").catch(() => false),
@@ -209,36 +225,59 @@ async function runPaneBackup(frame) {
 
 async function handleCloseRequest(win) {
   if (win.isDestroyed()) return;
-  // In parallel, not one frame at a time: same-origin panes share a renderer
-  // process, so a wedged pane's main thread also blocks executeJavaScript calls
-  // aimed at every other frame in that same window - main frame included.
-  // Starting all the timeouts together caps the wait at the slowest one, not
-  // their sum; sequentially it was the sum, measured at ~3s for two frames
-  // against ~1.5s for either alone.
+  // In parallel, not one frame at a time (and both kinds of check together, not
+  // back to back): same-origin panes share a renderer process, so a wedged
+  // pane's main thread blocks executeJavaScript aimed at every frame in the
+  // window, main frame included. Starting every timeout together caps the wait
+  // at the slowest one, not their sum - sequential checks measured at ~3s for
+  // two frames against ~1.5s running together.
   const frames = win.webContents.mainFrame.framesInSubtree;
-  const dirtyResults = await Promise.all(frames.map((frame) => paneIsDirty(frame)));
+  const [dirtyResults, splitResults] = await Promise.all([
+    Promise.all(frames.map((frame) => paneIsDirty(frame))),
+    Promise.all(frames.map((frame) => paneSplitActive(frame))),
+  ]);
   const dirtyFrames = frames.filter((_frame, i) => dirtyResults[i]);
+  const anySplitActive = splitResults.some(Boolean);
 
-  if (dirtyFrames.length === 0) {
+  if (dirtyFrames.length === 0 && !anySplitActive) {
     win.destroy();
     return;
   }
 
-  const choice = dialog.showMessageBoxSync(win, {
-    type: "question",
-    buttons: ["حفظ نسخة ثم إغلاق", "إغلاق دون حفظ", "إلغاء"],
-    defaultId: 0,
-    cancelId: 2,
-    noLink: true,
-    title: "نسخة احتياطية",
-    message: "لديك تعديلات لم تُحفظ في نسخة احتياطية منذ آخر مرة.",
-    detail: "الحواشي والعناوين وبطاقات الكتب وترتيب الصفحات محفوظة على هذا الجهاز فقط. يُنصح بحفظ نسخة احتياطية قبل الإغلاق حتى لا تفقدها.",
-  });
+  // Two different shapes of dialog, not one merged into the other. Backing up
+  // is one click main.js can trigger unattended; exporting a split view needs
+  // its own dialog for quality and size, so there is no equivalent "just do it"
+  // button to offer here - the honest options are "go back and export it
+  // yourself" or "close anyway", and offering a fake save action would just
+  // teach the reader to trust a button that does not do what it says.
+  let opts;
+  if (dirtyFrames.length > 0) {
+    opts = {
+      buttons: ["حفظ نسخة ثم إغلاق", "إغلاق دون حفظ", "إلغاء"],
+      defaultId: 0,
+      cancelId: 2,
+      message: "لديك تعديلات لم تُحفظ في نسخة احتياطية منذ آخر مرة.",
+      detail: "الحواشي والعناوين وبطاقات الكتب وترتيب الصفحات محفوظة على هذا الجهاز فقط. يُنصح بحفظ نسخة احتياطية قبل الإغلاق حتى لا تفقدها."
+        + (anySplitActive
+          ? "\n\nوأحد المخطوطات المفتوحة معروض مُقسَّمًا (مقصوصًا) الآن - هذا العرض لا يُحفظ عند الإغلاق ولا في النسخة الاحتياطية. صدّره كملف إن أردت الاحتفاظ به نهائيًا."
+          : ""),
+    };
+  } else {
+    opts = {
+      buttons: ["إغلاق على أي حال", "إلغاء"],
+      defaultId: 1, // cautious default: closing over unexported split work is the one that should need a deliberate click
+      cancelId: 1,
+      message: "أحد المخطوطات المفتوحة معروض مُقسَّمًا (مقصوصًا) الآن.",
+      detail: "هذا العرض لا يُحفظ عند إغلاق الملف أو البرنامج، ويبدأ كل ملف مغلقًا عند فتحه من جديد. إن أردت الاحتفاظ بالمخطوط مُقسَّمًا بشكل نهائي، أَلغِ الإغلاق الآن وصدّره أولاً.",
+    };
+  }
 
-  if (choice === 2 || win.isDestroyed()) return; // إلغاء: leave the window open
+  const choice = dialog.showMessageBoxSync(win, { type: "question", noLink: true, title: "نسخة احتياطية", ...opts });
 
-  if (choice === 0) {
-    // In parallel for the same reason as the dirty check above - one dirty pane
+  if (choice === opts.cancelId || win.isDestroyed()) return; // leave the window open
+
+  if (dirtyFrames.length > 0 && choice === 0) {
+    // In parallel for the same reason as the checks above - one dirty pane
     // stuck under a timeout should not delay the other pane's backup behind it.
     await Promise.all(dirtyFrames.map((frame) => runPaneBackup(frame)));
   }
