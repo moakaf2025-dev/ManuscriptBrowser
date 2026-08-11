@@ -58,10 +58,11 @@ import {
 } from "./manuscriptDoc";
 import { buildHeadingsDocument, buildCommentsDocument, toDocxBlob } from "./manuscriptExport";
 import { DEFAULT_RECIPE, RECIPE_PRESETS } from "./imageEnhance";
+import { buildBackup, parseBackup, mergeInto } from "./manuscriptBackup";
 import { enhancePixels } from "./enhanceClient";
 import {
   BookmarkModal, InfoEditorModal, HeadingModal, CommentModal,
-  SnipOverlay, SnipPreview, AboutModal, SHORTCUTS,
+  SnipOverlay, SnipPreview, AboutModal, SHORTCUTS, SHORTCUTS_NOTE,
 } from "./ManuscriptDialogs";
 import { PDFDocument } from "pdf-lib";
 
@@ -364,6 +365,7 @@ export default function ManuscriptRuler() {
   const pageWrapRef = useRef(null);
   const scrollRef = useRef(null);
   const fileInputRef = useRef(null);
+  const backupInputRef = useRef(null);
   const rulerDragRef = useRef({ dragging: false, offsetY: 0 });
   const stateRef = useRef(state);
   const hasFileRef = useRef(false);
@@ -1112,6 +1114,57 @@ export default function ManuscriptRuler() {
     } finally {
       setLoading(false);
       setLoadingMsg("جارٍ تحميل الصفحة…");
+    }
+  };
+
+  // ---------------- Backup / restore ----------------
+  // Keys are stored with the pane namespace suffix; a backup drops it so a file
+  // taken in one pane restores into the other, or into a single-pane install.
+  const backupAll = () => {
+    try {
+      const payload = buildBackup((key) => localStorage.getItem(key + _NS_SUFFIX));
+      const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.download = `نسخة احتياطية - متصفح المخطوطات - ${stamp}.json`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      const s = payload.summary;
+      showToast(`حُفظت نسخة احتياطية: ${s.manuscripts} مخطوطاً · ${s.comments} تعليقاً`);
+    } catch (e) {
+      console.error(e);
+      showToast("تعذّر حفظ النسخة الاحتياطية");
+    }
+  };
+
+  const restoreAll = async (file) => {
+    if (!file) return;
+    try {
+      const parsed = parseBackup(await file.text());
+      if (!parsed.ok) { showToast(parsed.error); return; }
+      const s = parsed.summary;
+      const when = parsed.savedAt ? new Date(parsed.savedAt).toLocaleDateString("ar-EG") : "غير معروف";
+      const ok = window.confirm(
+        `استعادة نسخة احتياطية بتاريخ ${when}\n\n` +
+        `تحتوي على ${s.manuscripts} مخطوطاً و${s.comments} تعليقاً و${s.headings} عنواناً.\n\n` +
+        `تُضاف إلى عملك الحالي ولا تمحوه: ما هو موجود عندك يبقى كما هو، ويُضاف ما ليس عندك.\n\n` +
+        `سيُعاد تشغيل الواجهة بعد الاستعادة.`
+      );
+      if (!ok) return;
+      for (const [key, value] of Object.entries(parsed.data)) {
+        const full = key + _NS_SUFFIX;
+        // State is a single object, not a per-manuscript map — leave the live one alone.
+        if (key === "manuscriptRulerState.v1") continue;
+        const merged = mergeInto(localStorage.getItem(full), value);
+        localStorage.setItem(full, JSON.stringify(merged));
+      }
+      showToast("تمت الاستعادة — يُعاد التحميل…");
+      setTimeout(() => window.location.reload(), 900);
+    } catch (e) {
+      console.error(e);
+      showToast("تعذّرت الاستعادة");
     }
   };
 
@@ -2083,6 +2136,14 @@ export default function ManuscriptRuler() {
         onChange={onFileInputChange}
         data-testid="mr-file-input"
       />
+      <input
+        ref={backupInputRef}
+        type="file"
+        accept=".json,application/json"
+        style={{ display: "none" }}
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; restoreAll(f); }}
+        data-testid="mr-backup-input"
+      />
 
       <div className="mr-topbar mr-topbar-v2" data-testid="mr-topbar">
         <div className="mr-brand">
@@ -2275,17 +2336,17 @@ export default function ManuscriptRuler() {
                     </div>
                   )}
                   <div className="mr-field">
-                    <label>السطوع <span className="val">{state.brightness}%</span></label>
+                    <label>السطوع (Brightness) <span className="val">{state.brightness}%</span></label>
                     <input type="range" min="30" max="220" value={state.brightness}
                       onChange={(e) => setState((s) => ({ ...s, brightness: Number(e.target.value) }))} data-testid="mr-set-brightness" />
                   </div>
                   <div className="mr-field">
-                    <label>التباين <span className="val">{state.contrast}%</span></label>
+                    <label>التباين (Contrast) <span className="val">{state.contrast}%</span></label>
                     <input type="range" min="30" max="280" value={state.contrast}
                       onChange={(e) => setState((s) => ({ ...s, contrast: Number(e.target.value) }))} data-testid="mr-set-contrast" />
                   </div>
                   <div className="mr-field">
-                    <label>الإشباع <span className="val">{state.saturate}%</span></label>
+                    <label>الإشباع (Saturation) <span className="val">{state.saturate}%</span></label>
                     <input type="range" min="0" max="300" value={state.saturate}
                       onChange={(e) => setState((s) => ({ ...s, saturate: Number(e.target.value) }))} data-testid="mr-set-saturate" />
                   </div>
@@ -2295,7 +2356,7 @@ export default function ManuscriptRuler() {
                       onChange={(e) => setState((s) => ({ ...s, sharpen: Number(e.target.value) }))} data-testid="mr-set-sharpen" />
                   </div>
                   <div className="mr-field">
-                    <label>إزالة التشويش <span className="val">{state.denoise}%</span></label>
+                    <label>إزالة التشويش (Denoise) <span className="val">{state.denoise}%</span></label>
                     <input type="range" min="0" max="100" value={state.denoise}
                       onChange={(e) => setState((s) => ({ ...s, denoise: Number(e.target.value) }))} data-testid="mr-set-denoise" />
                   </div>
@@ -2545,6 +2606,16 @@ export default function ManuscriptRuler() {
                 <FileText size={13} /> تصدير العناوين إلى Word
               </button>
               {/* "التقاط لقطة" lived here too, duplicating the لقطة button in the toolbar. */}
+              <div className="mr-pop-sep" />
+              <button className="mr-pop-item" onClick={() => { backupAll(); setOpenGroup(null); }} data-testid="mr-backup-save">
+                <Save size={13} /> حفظ نسخة احتياطية من عملي
+              </button>
+              <button className="mr-pop-item" onClick={() => { backupInputRef.current?.click(); setOpenGroup(null); }} data-testid="mr-backup-restore">
+                <Download size={13} /> استعادة من نسخة احتياطية
+              </button>
+              <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.7, padding: "4px 8px" }}>
+                النسخة الاحتياطية تشمل التعليقات والعناوين والبطاقات والترقيم وترتيب الصفحات — لا صور المخطوط.
+              </div>
             </div>
           )}
         </div>
@@ -2937,6 +3008,9 @@ export default function ManuscriptRuler() {
                   <X size={18} />
                 </button>
               </h2>
+              <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.8, marginBottom: 8 }} data-testid="mr-shortcuts-note">
+                {SHORTCUTS_NOTE}
+              </div>
               <div className="mr-shortcuts-list">
                 {SHORTCUTS.map((row) => (
                   <div className="mr-shortcut-row" key={row.desc}>

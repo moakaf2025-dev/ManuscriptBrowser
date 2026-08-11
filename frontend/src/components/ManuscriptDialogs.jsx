@@ -678,6 +678,10 @@ export const SHORTCUTS = [
   { desc: "تحريك المسطرة سطراً لأعلى", keys: ["↑"] },
   { desc: "الصفحة التالية", keys: ["Page Down"] },
   { desc: "الصفحة السابقة", keys: ["Page Up"] },
+  // Bound in the key handler but never advertised until now.
+  { desc: "أول المخطوط", keys: ["Home"] },
+  { desc: "آخر المخطوط", keys: ["End"] },
+  { desc: "تشغيل/إيقاف تمرير المسطرة التلقائي", keys: ["مسافة"] },
   { desc: "تكبير", keys: ["Ctrl", "+"] },
   { desc: "تصغير", keys: ["Ctrl", "−"] },
   { desc: "تكبير/تصغير بعجلة الفأرة", keys: ["Ctrl", "عجلة"] },
@@ -691,6 +695,10 @@ export const SHORTCUTS = [
   { desc: "فتح/إغلاق نافذة الاختصارات", keys: ["؟"] },
   { desc: "إغلاق النوافذ", keys: ["Esc"] },
 ];
+
+// Matched on the physical key, so these work with an Arabic keyboard layout too.
+export const SHORTCUTS_NOTE =
+  "الاختصارات تعمل مع لوحة المفاتيح العربية والإنجليزية على السواء — العبرة بموضع المفتاح لا بالحرف المطبوع عليه.";
 
 
 export function AboutModal({ onClose }) {
