@@ -1691,10 +1691,11 @@ export default function ManuscriptRuler() {
     setLoading(true);
     setLoadingMsg("تصدير المخطوط المقصوص… قد يستغرق وقتاً");
     try {
-      const { PDFDocument } = await import("pdf-lib");
+      const { PDFDocument, PDFName, PDFHexString } = await import("pdf-lib");
       const pdfDoc = await PDFDocument.create();
       const quality = 0.95;
       const maxSize = 4000;
+      const pageRefs = [];
       for (let i = 1; i <= pageCount; i++) {
         setLoadingMsg(`صفحة ${i} / ${pageCount}…`);
         const page = await doc.getPage(i);
@@ -1713,7 +1714,38 @@ export default function ManuscriptRuler() {
         const img = await pdfDoc.embedJpg(bytes);
         const pg = pdfDoc.addPage([img.width, img.height]);
         pg.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+        pageRefs.push(pg.ref);
       }
+
+      // One bookmark per page, titled with the same folio label ("١/أ", "١/ب", …)
+      // the reader already sees on screen — this is the whole point of exporting
+      // split and numbered rather than plain: a PDF viewer's own sidebar becomes
+      // a page-turnable index of the manuscript, not just a page count. `doc` is
+      // already the split view here (composeDoc ran before this was called), so
+      // page i genuinely is one physical side, not a spread.
+      if (state.folioMode && pageCount > 0) {
+        const context = pdfDoc.context;
+        const outlineDict = context.obj({ Type: "Outlines" });
+        const outlineRef = context.register(outlineDict);
+        const itemRefs = Array.from({ length: pageCount }, () => context.nextRef());
+        for (let i = 1; i <= pageCount; i++) {
+          const title = formatFolio(i, { startFolio: state.folioStart, offset: state.folioOffset });
+          const item = context.obj({
+            Title: PDFHexString.fromText(title),
+            Parent: outlineRef,
+            Dest: [pageRefs[i - 1], "Fit"],
+          });
+          if (i > 1) item.set(PDFName.of("Prev"), itemRefs[i - 2]);
+          if (i < pageCount) item.set(PDFName.of("Next"), itemRefs[i]);
+          context.assign(itemRefs[i - 1], item);
+        }
+        outlineDict.set(PDFName.of("First"), itemRefs[0]);
+        outlineDict.set(PDFName.of("Last"), itemRefs[itemRefs.length - 1]);
+        outlineDict.set(PDFName.of("Count"), context.obj(pageCount));
+        pdfDoc.catalog.set(PDFName.of("Outlines"), outlineRef);
+        pdfDoc.catalog.set(PDFName.of("PageMode"), PDFName.of("UseOutlines"));
+      }
+
       const pdfBytes = await pdfDoc.save();
       const blob = new Blob([pdfBytes], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
@@ -1723,7 +1755,9 @@ export default function ManuscriptRuler() {
       a.download = `${base} - مقصوص.pdf`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 8000);
-      showToast(`تم تصدير المخطوط المقصوص (${pageCount} صفحة)`);
+      showToast(state.folioMode
+        ? `تم تصدير المخطوط المقصوص (${pageCount} صفحة) مع فهرس بأرقام الأوراق`
+        : `تم تصدير المخطوط المقصوص (${pageCount} صفحة)`);
     } catch (e) {
       console.error(e);
       showToast("تعذّر تصدير PDF");
@@ -3389,6 +3423,7 @@ export default function ManuscriptRuler() {
                   </button>
                   <div style={{ fontSize: 11, color: "var(--muted)", padding: "6px 8px", background: "var(--ink-3)", borderRadius: 6, border: "1px solid var(--line)", lineHeight: 1.6 }}>
                     ملاحظة: حجم الملف سيكون كبيراً (بالجودة الأصلية)، ويمكنك تصغيره لاحقاً من خيار «PDF مضغوط» في قسم التصدير.
+                    {state.folioMode && <><br />وبما أن الترقيم مفعَّل، سيُضاف فهرس (bookmarks) برقم كل ورقة — ١/أ، ١/ب، ٢/أ… — يظهر في الشريط الجانبي لأي برنامج قراءة PDF.</>}
                   </div>
                 </>
               )}
