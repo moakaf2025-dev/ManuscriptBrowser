@@ -2189,7 +2189,7 @@ export default function ManuscriptRuler() {
             <ChevronDown size={12} />
           </button>
           {openGroup === "browse" && (
-            <div className="mr-popover mr-popover-wide" data-testid="mr-pop-browse">
+            <div className="mr-popover mr-popover-wide mr-popover-side" data-testid="mr-pop-browse">
               <button className="mr-pop-x" onClick={() => setOpenGroup(null)} title="إغلاق"><X size={14} /></button>
               <div className="mr-pop-title">التكبير: {Math.round(scale * 100)}%</div>
               <div className="mr-pop-row">
@@ -2354,7 +2354,7 @@ export default function ManuscriptRuler() {
             <ChevronDown size={14} />
           </button>
           {openGroup === "ruler" && (
-            <div className="mr-popover mr-popover-wide" data-testid="mr-pop-ruler">
+            <div className="mr-popover mr-popover-wide mr-popover-side" data-testid="mr-pop-ruler">
               <button className="mr-pop-x" onClick={() => setOpenGroup(null)} title="إغلاق"><X size={14} /></button>
               <div className="mr-pop-title">شكل المسطرة:</div>
               <div className="mr-pop-row">

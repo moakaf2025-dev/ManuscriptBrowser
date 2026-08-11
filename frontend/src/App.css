@@ -1155,6 +1155,23 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   overflow-y: auto;
 }
 .mr-popover-wide { min-width: 320px; }
+
+/* The browse and ruler panels are long lists of sliders, not short menus. Hung
+   under their toolbar button they landed across the middle of the sheet — the
+   part the reader is looking at — and stayed there while the sliders were used.
+   Pinned to the right edge instead, alongside the numbering panel, which is
+   where the reader already expects a settings column to appear. */
+.mr-popover-side {
+  position: fixed;
+  top: 92px;
+  right: 10px;
+  left: auto;
+  inset-inline-start: auto;
+  inset-inline-end: auto;
+  width: 340px;
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+}
 .mr-pop-title {
   font-size: 12px;
   color: var(--amber);
