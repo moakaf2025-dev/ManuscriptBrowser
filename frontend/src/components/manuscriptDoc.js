@@ -514,9 +514,23 @@ export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = fal
   let base;
 
   if (PDF_EXT.test(name)) {
-    const buf = await file.arrayBuffer();
-    base = await pdfjsLib.getDocument({ data: buf }).promise;
+    // Hand pdf.js a URL, not the bytes. `file.arrayBuffer()` pulls the whole file
+    // into a JavaScript buffer before a single page is drawn — on a 1.5GB scan that
+    // is 1.5GB resident, and close to double while the copy is made, which is past
+    // what the renderer process will allocate. Reading through a blob URL lets
+    // pdf.js request the byte ranges it actually needs.
+    //
+    // disableAutoFetch stops it quietly pulling the rest of the file in the
+    // background once it has the parts it needs to open the document.
+    const url = URL.createObjectURL(file);
+    base = await pdfjsLib.getDocument({
+      url,
+      disableAutoFetch: true,
+      disableStream: false,
+      rangeChunkSize: 1 << 20,
+    }).promise;
     base.kind = "pdf";
+    base._objectUrl = url;
   } else if (IMAGE_EXT.test(name)) {
     base = createImageDoc([{ name: file.name, load: async () => file }]);
   } else if (/\.zip$/i.test(name) || ARCHIVE_EXT.test(name)) {

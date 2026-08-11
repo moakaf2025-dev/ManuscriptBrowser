@@ -188,6 +188,9 @@ function releaseTabResources(tab) {
   const base = tab?.baseDoc;
   if (!base) return;
   try { base.destroy?.(); } catch { /* noop */ }
+  // A PDF opened by URL holds a blob URL for the source file; releasing it is what
+  // lets the browser drop the file's backing store.
+  try { if (base._objectUrl) URL.revokeObjectURL(base._objectUrl); } catch { /* noop */ }
 }
 
 const RECENTS_KEY = "manuscriptRulerRecents.v1" + _NS_SUFFIX;
