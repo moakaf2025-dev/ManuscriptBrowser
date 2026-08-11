@@ -96,6 +96,28 @@ function resolveIconPath() {
   return path.join(__dirname, "icon.ico");
 }
 
+// The illustrated guide sits beside the exe when packaged (extraResources put it
+// one level up from resources/, same as README-اقرأني.txt) and beside main.js in
+// dev - same two-candidate shape as resolveIconPath above.
+function resolveGuidePath() {
+  const candidates = [
+    path.join(process.resourcesPath || "", "..", "دليل-الاستخدام.html"),
+    path.join(__dirname, "دليل-الاستخدام.html"),
+  ];
+  for (const p of candidates) {
+    try { if (p && fs.existsSync(p)) return p; } catch {}
+  }
+  return null;
+}
+
+ipcMain.handle("ms:open-user-guide", async () => {
+  const guidePath = resolveGuidePath();
+  if (!guidePath) throw new Error("دليل الاستخدام غير موجود بجانب البرنامج");
+  const err = await shell.openPath(guidePath);
+  if (err) throw new Error(err);
+  return true;
+});
+
 function createWindow() {
   const iconPath = resolveIconPath();
   const win = new BrowserWindow({

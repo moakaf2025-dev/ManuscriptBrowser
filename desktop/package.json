@@ -37,6 +37,10 @@
       {
         "from": "README-اقرأني.txt",
         "to": "../README-اقرأني.txt"
+      },
+      {
+        "from": "دليل-الاستخدام.html",
+        "to": "../دليل-الاستخدام.html"
       }
     ],
     "directories": {

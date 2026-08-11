@@ -35,6 +35,11 @@ contextBridge.exposeInMainWorld("msElectron", {
     return () => ipcRenderer.removeListener("ms:open-path-available", handler);
   },
 
+  // Opens the illustrated user guide (bundled beside the exe) in the system's
+  // default browser. Not exposed to a browser-preview build - there is no
+  // bundled file to find outside the packaged app.
+  openUserGuide: () => ipcRenderer.invoke("ms:open-user-guide"),
+
   // Copy an image (as data-URL) to the OS clipboard via the main process.
   // Required because `navigator.clipboard.write` is disabled on file:// origins,
   // and the `clipboard` module is only available in the main process.
