@@ -69,8 +69,45 @@ export default function SplitView() {
   return <SplitShell panes={panes} setPanes={setPanes} sizes={sizes} beginDrag={beginDrag} containerRef={containerRef} />;
 }
 
+// A pane iframe must not be created before this document has finished loading.
+//
+// Electron injects the preload into a child frame only for frames created after
+// the parent document's load event; one created while the parent is still loading
+// is skipped, silently and every time. React mounts during the deferred bundle's
+// execution — before load — so the panes were being created inside exactly that
+// window, and `window.msElectron` was undefined in the only document the app
+// actually runs in. That is why the clipboard bridge still did not work in the
+// panes after nodeIntegrationInSubFrames was turned on, why webUtils.getPathForFile
+// always came back empty, and why the recent-files list showed the browser's
+// "no path available" note inside the desktop app.
+//
+// Verified on Electron 33.2.0: the same iframe, same URL and attributes, gets the
+// preload when created after load and does not when created before. Do not drop
+// this gate to make the pane appear a few milliseconds sooner.
+//
+// Note the extra task: setting state from inside the load handler makes React
+// render synchronously, still within the load event, and a frame created there is
+// early enough to be skipped. The pane has to be created in a later task, so the
+// timeout is load-bearing and not a slop delay.
+function useDocumentLoaded() {
+  const [loaded, setLoaded] = React.useState(false);
+  React.useEffect(() => {
+    if (loaded) return undefined;
+    let timer = null;
+    const arm = () => { timer = setTimeout(() => setLoaded(true), 0); };
+    if (document.readyState === "complete") {
+      arm();
+      return () => clearTimeout(timer);
+    }
+    window.addEventListener("load", arm, { once: true });
+    return () => { clearTimeout(timer); window.removeEventListener("load", arm); };
+  }, [loaded]);
+  return loaded;
+}
+
 function SplitShell({ panes, setPanes, sizes, beginDrag, containerRef }) {
   const frameARef = React.useRef(null);
+  const loaded = useDocumentLoaded();
 
   // Keyboard shortcuts live in the pane, and a pane is an iframe, so the pane has
   // to hold focus for a key press to reach it. On load focus sits on this outer
@@ -124,15 +161,17 @@ function SplitShell({ panes, setPanes, sizes, beginDrag, containerRef }) {
       <div className="sv-body" ref={containerRef} data-testid="sv-body">
         {/* Pane A: always mounted so its state persists across mode switches */}
         <div className="sv-pane" style={{ flex: `0 0 ${panes === 1 ? 100 : sizes[0]}%` }} data-testid="sv-pane-A">
-          <iframe
-            key="pane-A"
-            ref={frameARef}
-            title="مخطوط A"
-            src={`${baseHref}#ns=A`}
-            className="sv-frame"
-            onLoad={() => { try { frameARef.current?.contentWindow?.focus(); } catch { /* noop */ } }}
-            allow="clipboard-write; clipboard-read; fullscreen *"
-          />
+          {loaded && (
+            <iframe
+              key="pane-A"
+              ref={frameARef}
+              title="مخطوط A"
+              src={`${baseHref}#ns=A`}
+              className="sv-frame"
+              onLoad={() => { try { frameARef.current?.contentWindow?.focus(); } catch { /* noop */ } }}
+              allow="clipboard-write; clipboard-read; fullscreen *"
+            />
+          )}
         </div>
         {panes === 2 && (
           <>
@@ -143,13 +182,15 @@ function SplitShell({ panes, setPanes, sizes, beginDrag, containerRef }) {
               title="اسحب للتحكم في حجم المخطوطات"
             />
             <div className="sv-pane" style={{ flex: `0 0 ${sizes[1]}%` }} data-testid="sv-pane-B">
-              <iframe
-                key="pane-B"
-                title="مخطوط B"
-                src={`${baseHref}#ns=B`}
-                className="sv-frame"
-                allow="clipboard-write; clipboard-read; fullscreen *"
-              />
+              {loaded && (
+                <iframe
+                  key="pane-B"
+                  title="مخطوط B"
+                  src={`${baseHref}#ns=B`}
+                  className="sv-frame"
+                  allow="clipboard-write; clipboard-read; fullscreen *"
+                />
+              )}
             </div>
           </>
         )}
