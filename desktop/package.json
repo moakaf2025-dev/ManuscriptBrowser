@@ -8,7 +8,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "pack:win": "electron-builder --win portable --x64 --publish=never; python3 scripts/patch-exe-icon.py dist/win-unpacked/ManuscriptBrowser.exe icon.ico"
+    "pack:win": "electron-builder --win dir --x64 --publish=never && python3 scripts/patch-exe-icon.py dist/win-unpacked/ManuscriptBrowser.exe icon.ico && electron-builder --win nsis portable --x64 --publish=never --prepackaged dist/win-unpacked"
   },
   "build": {
     "appId": "com.moakaf.manuscriptbrowser",
@@ -45,10 +45,25 @@
     "win": {
       "icon": "icon.ico",
       "target": [
+        { "target": "nsis", "arch": ["x64"] },
         { "target": "portable", "arch": ["x64"] }
       ],
-      "artifactName": "ManuscriptBrowser-${version}-portable.exe",
       "signAndEditExecutable": false
+    },
+    "nsis": {
+      "artifactName": "ManuscriptBrowser-${version}-setup.exe",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "متصفح المخطوطات",
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico"
+    },
+    "portable": {
+      "artifactName": "ManuscriptBrowser-${version}-portable.exe"
     },
     "electronDownload": {
       "cache": "/tmp/electron-cache"

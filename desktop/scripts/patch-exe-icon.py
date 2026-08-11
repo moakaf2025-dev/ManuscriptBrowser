@@ -9,7 +9,17 @@ Usage:
 """
 import sys
 import os
-import lief
+
+try:
+    import lief
+except ImportError:
+    # Only the wine-less builders need this workaround, and only those install
+    # lief. Elsewhere the icon comes from electron-builder, so a missing lief is
+    # not a build failure. pack:win now feeds this exe straight into the
+    # installer, so it stops on real errors - which means this one has to say
+    # plainly that it did nothing rather than take the build down with it.
+    print("patch-exe-icon: lief is not installed; leaving the icon to electron-builder")
+    sys.exit(0)
 
 
 def build_mini_ico(src_ico_bytes: bytes, w: int, h: int) -> bytes | None:
