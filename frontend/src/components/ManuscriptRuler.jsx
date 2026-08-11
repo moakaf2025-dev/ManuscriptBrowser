@@ -193,6 +193,17 @@ function releaseTabResources(tab) {
   try { if (base._objectUrl) URL.revokeObjectURL(base._objectUrl); } catch { /* noop */ }
 }
 
+// Above this size, opening a manuscript is not something the program does well.
+// pdf.js allocates a buffer the length of the whole file to parse it — literally
+// `new Uint8Array(length)` for the document — so the renderer holds the entire
+// manuscript no matter how little of it is being read, and reading by byte range
+// cannot change that. Measured on a 1.69GB manuscript: it opens, but the renderer
+// sits at about 1.9GB, and export - which accumulates every rendered page - has no
+// chance at all. 500MB keeps that cost near half a gigabyte, which a machine can
+// carry. It is a warning and not a refusal: a reader who knows what they are doing
+// can still go ahead.
+const LARGE_FILE_BYTES = 500 * 1024 * 1024;
+
 const RECENTS_KEY = "manuscriptRulerRecents.v1" + _NS_SUFFIX;
 const AUTO_BM_KEY = "manuscriptRulerAutoBM.v1" + _NS_SUFFIX;
 const PER_FILE_SETTINGS_KEY = "manuscriptRulerPerFileSettings.v1" + _NS_SUFFIX;
@@ -508,6 +519,16 @@ export default function ManuscriptRuler() {
 
   const handleFile = async (file) => {
     if (!file) return;
+    if (file.size > LARGE_FILE_BYTES) {
+      const ok = window.confirm(
+        `حجم هذا الملف ${formatBytes(file.size)}، وهو أكبر مما يتحمّله البرنامج بارتياح.\n\n` +
+        `المستحسن ألا يزيد حجم المخطوط على ${formatBytes(LARGE_FILE_BYTES)}. فالبرنامج يُحمّل المخطوط كاملاً في الذاكرة عند فتحه، ` +
+        `فما زاد على ذلك قد يُبطئ الفتح والتنقل، وقد يفشل تصديره أو يُغلق البرنامج نفسه.\n\n` +
+        `إن كان المخطوط مصوّراً على أجزاء فافتحه جزءاً جزءاً، وإلا فاقسمه أو اضغط صوره قبل فتحه.\n\n` +
+        `أتريد المتابعة على أي حال؟`
+      );
+      if (!ok) return;
+    }
     setLoading(true);
     setLoadingMsg("جارٍ فتح الملف…");
     try {
