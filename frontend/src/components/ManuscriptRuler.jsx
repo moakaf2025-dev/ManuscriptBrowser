@@ -191,6 +191,10 @@ function releaseTabResources(tab) {
   // A PDF opened by URL holds a blob URL for the source file; releasing it is what
   // lets the browser drop the file's backing store.
   try { if (base._objectUrl) URL.revokeObjectURL(base._objectUrl); } catch { /* noop */ }
+  // A PDF read by range holds an open file descriptor in the main process instead.
+  // Without this, every manuscript opened in the session leaves one behind and the
+  // file stays locked against renaming or deleting until the program quits.
+  try { if (base._rangeFileId) window.msElectron?.closeRangeFile?.(base._rangeFileId); } catch { /* noop */ }
 }
 
 // Above this size, opening a manuscript is not something the program does well.
@@ -517,18 +521,28 @@ export default function ManuscriptRuler() {
   // ---------------- File handling ----------------
   const openFile = () => fileInputRef.current?.click();
 
-  const handleFile = async (file) => {
+  // Asked before anything is read, so declining costs nothing. Both ways in - the
+  // picker and a path from the command line - go through it.
+  const confirmLargeManuscript = (size) => {
+    if (!(size > LARGE_FILE_BYTES)) return true;
+    return window.confirm(
+      `حجم هذا الملف ${formatBytes(size)}، وهو أكبر مما يتحمّله البرنامج بارتياح.\n\n` +
+      `المستحسن ألا يزيد حجم المخطوط على ${formatBytes(LARGE_FILE_BYTES)}. فالبرنامج يُحمّل المخطوط كاملاً في الذاكرة عند فتحه، ` +
+      `فما زاد على ذلك قد يُبطئ الفتح والتنقل، وقد يفشل تصديره أو يُغلق البرنامج نفسه.\n\n` +
+      `إن كان المخطوط مصوّراً على أجزاء فافتحه جزءاً جزءاً، وإلا فاقسمه أو اضغط صوره قبل فتحه.\n\n` +
+      `أتريد المتابعة على أي حال؟`
+    );
+  };
+
+  // `knownPath` is set when the manuscript came from a path rather than the file
+  // picker; `file` is then a plain descriptor, not a File, and only its name, size
+  // and lastModified are ever read. `sizeConfirmed` says the caller already put
+  // the size question to the reader — openPath has to ask before it reads an
+  // image or an archive, and asking twice for one manuscript is worse than not
+  // asking at all.
+  const handleFile = async (file, knownPath, sizeConfirmed) => {
     if (!file) return;
-    if (file.size > LARGE_FILE_BYTES) {
-      const ok = window.confirm(
-        `حجم هذا الملف ${formatBytes(file.size)}، وهو أكبر مما يتحمّله البرنامج بارتياح.\n\n` +
-        `المستحسن ألا يزيد حجم المخطوط على ${formatBytes(LARGE_FILE_BYTES)}. فالبرنامج يُحمّل المخطوط كاملاً في الذاكرة عند فتحه، ` +
-        `فما زاد على ذلك قد يُبطئ الفتح والتنقل، وقد يفشل تصديره أو يُغلق البرنامج نفسه.\n\n` +
-        `إن كان المخطوط مصوّراً على أجزاء فافتحه جزءاً جزءاً، وإلا فاقسمه أو اضغط صوره قبل فتحه.\n\n` +
-        `أتريد المتابعة على أي حال؟`
-      );
-      if (!ok) return;
-    }
+    if (!sizeConfirmed && !confirmLargeManuscript(file.size)) return;
     setLoading(true);
     setLoadingMsg("جارٍ فتح الملف…");
     try {
@@ -537,7 +551,19 @@ export default function ManuscriptRuler() {
       setExportEstimate(null); // an estimate belongs to the file it was measured on
       const isArchive = /\.(zip|rar|7z|tar|tar\.gz|tgz|tar\.bz2)$/i.test(file.name);
       if (isArchive) setLoadingMsg("جارٍ فك ضغط الملف…");
-      const baseD = await buildDocFromFile(file, { pdfjsLib, JSZip, splitPages: false });
+      // The real path on disk, when there is one. A PDF opened with it is read by
+      // byte range instead of being copied into the page, so it is resolved before
+      // the document is built and not just for the recent-files list. Electron 32+
+      // removed File.path; webUtils.getPathForFile replaces it, and a browser
+      // exposes no path at all.
+      let filePath = knownPath || "";
+      if (!filePath) {
+        try {
+          if (window.msElectron?.getFilePath) filePath = window.msElectron.getFilePath(file) || "";
+        } catch { /* noop */ }
+      }
+      if (!filePath) filePath = file.path || file.webkitRelativePath || "";
+      const baseD = await buildDocFromFile(file, { pdfjsLib, JSZip, splitPages: false, filePath });
       const range = { from: 1, to: baseD.numPages };
       // Restore any page order saved for this manuscript; splitting always starts off.
       const savedOrder = (loadKV(PAGE_ORDER_KEY) || {})[fileKey] || null;
@@ -572,13 +598,6 @@ export default function ManuscriptRuler() {
         const raw = localStorage.getItem(RECENTS_KEY);
         const recents = raw ? JSON.parse(raw) : [];
         const filtered = recents.filter((r) => r.fileKey !== fileKey);
-        // Electron 32+: File.path removed; use webUtils via preload.
-        // Browser: file paths are not exposed for security reasons.
-        let filePath = "";
-        try {
-          if (window.msElectron?.getFilePath) filePath = window.msElectron.getFilePath(file) || "";
-        } catch {}
-        if (!filePath) filePath = file.path || file.webkitRelativePath || "";
         const next = [{ fileKey, name: file.name, path: filePath, at: Date.now() }, ...filtered].slice(0, 5);
         localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
       } catch { /* noop */ }
@@ -635,6 +654,52 @@ export default function ManuscriptRuler() {
     handleFile(f);
     e.target.value = "";
   };
+
+  // Open a manuscript the program was handed as a path — "Open with", or a file
+  // dragged onto the executable. There is no File object in that case, so the
+  // descriptor is built from a stat in the main process.
+  //
+  // A PDF goes straight through as a descriptor: buildDocFromFile reads it by byte
+  // range off the path and never needs the bytes here. Anything else has to be
+  // decoded or unpacked, so its bytes do come over and become a real File — the
+  // same object the picker would have produced.
+  const openPath = useCallback(async (filePath) => {
+    if (!filePath) return;
+    const bridge = window.msElectron;
+    if (!bridge?.statFile) return;
+    try {
+      const meta = await bridge.statFile(filePath);
+      if (!confirmLargeManuscript(meta.size)) return;
+      if (/\.pdf$/i.test(meta.name)) {
+        await handleFile({ name: meta.name, size: meta.size, lastModified: meta.lastModified }, meta.path, true);
+        return;
+      }
+      setLoading(true);
+      setLoadingMsg("جارٍ قراءة الملف…");
+      const bytes = await bridge.readFile(meta.path);
+      await handleFile(new File([bytes], meta.name, { lastModified: meta.lastModified }), meta.path, true);
+    } catch (e) {
+      console.error(e);
+      showToast(`تعذّر فتح: ${filePath}`);
+      setLoading(false);
+    }
+    // handleFile and the toast helpers are recreated every render; depending on
+    // them would re-arm the listener below on each one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A manuscript named on the command line, at startup or from a later launch
+  // that handed itself over to this one. Claiming clears it in the main process,
+  // so with two panes open exactly one of them gets a given file.
+  useEffect(() => {
+    const bridge = window.msElectron;
+    if (!bridge?.takePendingOpenPath) return undefined;
+    const claim = () => {
+      bridge.takePendingOpenPath().then((p) => { if (p) openPath(p); }).catch(() => { /* noop */ });
+    };
+    claim();
+    return bridge.onOpenPathAvailable ? bridge.onOpenPathAvailable(claim) : undefined;
+  }, [openPath]);
 
   // ---------------- Unified page rendering ----------------
   const renderPage = useCallback(

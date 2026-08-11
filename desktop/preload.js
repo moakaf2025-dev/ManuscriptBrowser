@@ -8,6 +8,20 @@ contextBridge.exposeInMainWorld("msElectron", {
     } catch { return ""; }
   },
 
+  // Opening a manuscript the program was given as a path rather than as a File.
+  // statFile is what the pane needs before deciding anything - name, size, mtime.
+  // A PDF is then read by byte range (openRangeFile / readRange, with `end`
+  // exclusive as pdf.js counts it); an image or archive has to come over whole.
+  //
+  // These deliberately do not swallow their errors: the caller falls back to
+  // reading the file whole when opening by range fails, and it can only do that
+  // if it is told.
+  statFile: (filePath) => ipcRenderer.invoke("ms:stat-file", filePath),
+  readFile: (filePath) => ipcRenderer.invoke("ms:read-file", filePath),
+  openRangeFile: (filePath) => ipcRenderer.invoke("ms:open-range-file", filePath),
+  readRange: (id, begin, end) => ipcRenderer.invoke("ms:read-range", { id, begin, end }),
+  closeRangeFile: (id) => ipcRenderer.invoke("ms:close-range-file", id),
+
   // A manuscript handed to the program on the command line, as "Open with" does.
   // Taking it clears it, so of the two panes only the one that asks first gets a
   // given path and the file is not opened twice.

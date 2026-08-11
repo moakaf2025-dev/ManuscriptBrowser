@@ -509,28 +509,97 @@ export async function unpackArchive(file) {
 // ------------------- Builder API -------------------
 const ARCHIVE_EXT = /\.(rar|7z|tar|tar\.gz|tgz|tar\.bz2)$/i;
 
-export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = false, splitRange, overridesRef } = {}) {
+// Open a PDF by reading byte ranges off disk, without the file ever being copied
+// into the page.
+//
+// pdf.js will only issue range requests for a URL it considers HTTP — it gates
+// them on `/^https?:/i.test(url)` and, failing that, never sends a Range header
+// at all. A blob: URL fails that test, so handing pdf.js one does not get ranges;
+// it gets the whole document read into the renderer, which is what left a 1.7GB
+// manuscript resident after opening. A custom scheme fails the same test.
+//
+// PDFDataRangeTransport is the way past it: pdf.js asks *us* for [begin, end) and
+// we answer from a file descriptor in the main process. No URL is involved, so
+// there is no protocol to register and nothing to gate.
+async function createRangeDoc(filePath, pdfjsLib, bridge) {
+  const { id, size } = await bridge.openRangeFile(filePath);
+
+  class DiskRangeTransport extends pdfjsLib.PDFDataRangeTransport {
+    constructor() {
+      // No initial data, and progressiveDone so pdf.js stops waiting on the
+      // "full" stream that will never produce anything and satisfies the whole
+      // document through ranges instead.
+      super(size, null, true, null);
+      this.aborted = false;
+    }
+
+    requestDataRange(begin, end) {
+      bridge.readRange(id, begin, end).then((bytes) => {
+        if (this.aborted) return;
+        // pdf.js matches the reply to its pending reader by `begin`, so a failed
+        // read must not answer with the wrong offset — better to leave it pending
+        // and let the caller's own error path run.
+        this.onDataRange(begin, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+      }).catch(() => { /* reader stays pending; destroy() tears it down */ });
+    }
+
+    abort() {
+      this.aborted = true;
+    }
+  }
+
+  const doc = await pdfjsLib.getDocument({
+    range: new DiskRangeTransport(),
+    disableAutoFetch: true, // do not quietly pull the rest once the document opens
+    disableStream: true,    // every byte comes through requestDataRange
+    rangeChunkSize: 1 << 20,
+  }).promise;
+  doc.kind = "pdf";
+  doc._rangeFileId = id;
+  return doc;
+}
+
+export async function buildDocFromFile(file, { pdfjsLib, JSZip, splitPages = false, splitRange, overridesRef, filePath } = {}) {
   const name = file.name.toLowerCase();
   let base;
 
   if (PDF_EXT.test(name)) {
-    // Hand pdf.js a URL, not the bytes. `file.arrayBuffer()` pulls the whole file
-    // into a JavaScript buffer before a single page is drawn — on a 1.5GB scan that
-    // is 1.5GB resident, and close to double while the copy is made, which is past
-    // what the renderer process will allocate. Reading through a blob URL lets
-    // pdf.js request the byte ranges it actually needs.
-    //
-    // disableAutoFetch stops it quietly pulling the rest of the file in the
-    // background once it has the parts it needs to open the document.
-    const url = URL.createObjectURL(file);
-    base = await pdfjsLib.getDocument({
-      url,
-      disableAutoFetch: true,
-      disableStream: false,
-      rangeChunkSize: 1 << 20,
-    }).promise;
-    base.kind = "pdf";
-    base._objectUrl = url;
+    const bridge = typeof window !== "undefined" ? window.msElectron : null;
+    base = null;
+    if (filePath && bridge?.openRangeFile) {
+      try {
+        base = await createRangeDoc(filePath, pdfjsLib, bridge);
+      } catch (err) {
+        // Falling back silently would turn "reads by range" into "loads the whole
+        // file" with nothing to show why, which is the failure that is hardest to
+        // notice on a large manuscript.
+        console.warn("تعذّر فتح المخطوط بالمقاطع؛ سيُقرأ كاملًا:", err);
+        base = null;
+      }
+    }
+    if (!base) {
+      // In a browser there is no path to read from, so this is the only option.
+      // `file.arrayBuffer()` would be worse still: it pulls the whole file into a
+      // JavaScript buffer before a single page is drawn, and close to double that
+      // while the copy is made.
+      //
+      // A manuscript opened by path has no File behind it, so if the range route
+      // failed there is nothing here to make a URL from and the bytes have to be
+      // fetched whole. That is the bad case this fallback exists for, and it is
+      // why the failure above is logged rather than swallowed.
+      const blob = file instanceof Blob
+        ? file
+        : new Blob([await bridge.readFile(filePath)], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      base = await pdfjsLib.getDocument({
+        url,
+        disableAutoFetch: true,
+        disableStream: false,
+        rangeChunkSize: 1 << 20,
+      }).promise;
+      base.kind = "pdf";
+      base._objectUrl = url;
+    }
   } else if (IMAGE_EXT.test(name)) {
     base = createImageDoc([{ name: file.name, load: async () => file }]);
   } else if (/\.zip$/i.test(name) || ARCHIVE_EXT.test(name)) {

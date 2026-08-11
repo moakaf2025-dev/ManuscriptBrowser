@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, shell, ipcMain, desktopCapturer, dialog, nativeImage, clipboard } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const fsp = require("fs/promises");
 
 // Windows taskbar identification (helps show correct icon + name)
 if (process.platform === "win32") {
@@ -168,6 +169,90 @@ ipcMain.handle("ms:save-file", async (event, payload) => {
   const full = path.join(targetDir, filename);
   fs.writeFileSync(full, Buffer.from(bytes));
   return full;
+});
+
+// ---- Reading a manuscript straight off disk, by path ----
+//
+// A file opened from the command line arrives as a path, and there is no File
+// object to hand the renderer. Two ways down from here.
+//
+// For a PDF, by byte range. pdf.js only asks for the parts it needs, but it can
+// only do that when something hands it those bytes: it decides whether ranges are
+// allowed with `/^https?:/i.test(url)`, so a blob: URL - or any custom scheme -
+// makes it give up on ranges and read the whole document into the page. So the
+// renderer drives a pdf.js PDFDataRangeTransport and each range it asks for lands
+// here as a positional read on an open descriptor. The file is never copied.
+//
+// The descriptor stays open for the life of the tab. Re-opening per chunk would
+// be a fresh path lookup on every read, and a manuscript is read thousands of
+// times while it is browsed.
+//
+// For an image or an archive there is nothing to read piecewise - the renderer
+// needs the bytes to decode or unpack - so those come over whole, which is what
+// the file picker was already doing for them anyway.
+const openManuscripts = new Map(); // id -> { fh, size, filePath }
+let nextManuscriptId = 1;
+
+async function closeManuscript(id) {
+  const entry = openManuscripts.get(id);
+  if (!entry) return false;
+  openManuscripts.delete(id);
+  try { await entry.fh.close(); } catch { /* already gone */ }
+  return true;
+}
+
+// What the pane needs before it can decide anything: the name to show, the size
+// to check against the warning threshold, and an mtime, so a manuscript opened by
+// path keys to the same stored notes as the same file opened through the picker.
+ipcMain.handle("ms:stat-file", async (_event, filePath) => {
+  if (typeof filePath !== "string" || !filePath.trim()) throw new Error("مسار الملف مفقود");
+  const resolved = path.resolve(filePath);
+  const st = await fsp.stat(resolved);
+  if (!st.isFile()) throw new Error("المسار لا يشير إلى ملف");
+  return { path: resolved, name: path.basename(resolved), size: st.size, lastModified: Math.floor(st.mtimeMs) };
+});
+
+ipcMain.handle("ms:read-file", async (_event, filePath) => {
+  if (typeof filePath !== "string" || !filePath.trim()) throw new Error("مسار الملف مفقود");
+  return fsp.readFile(path.resolve(filePath));
+});
+
+ipcMain.handle("ms:open-range-file", async (_event, filePath) => {
+  if (typeof filePath !== "string" || !filePath.trim()) throw new Error("مسار الملف مفقود");
+  const resolved = path.resolve(filePath);
+  const st = await fsp.stat(resolved);
+  if (!st.isFile()) throw new Error("المسار لا يشير إلى ملف");
+  const fh = await fsp.open(resolved, "r");
+  const id = nextManuscriptId++;
+  openManuscripts.set(id, { fh, size: st.size, filePath: resolved });
+  return { id, size: st.size };
+});
+
+ipcMain.handle("ms:read-range", async (_event, payload) => {
+  const { id, begin, end } = payload || {};
+  const entry = openManuscripts.get(id);
+  if (!entry) throw new Error("الملف غير مفتوح");
+  // pdf.js treats `end` as exclusive. Clamp both ends: it asks past EOF for the
+  // last chunk of the file as a matter of course.
+  const from = Math.max(0, Math.min(entry.size, Math.floor(Number(begin) || 0)));
+  const to = Math.max(from, Math.min(entry.size, Math.floor(Number(end) || 0)));
+  const length = to - from;
+  const buf = Buffer.allocUnsafe(length);
+  let filled = 0;
+  while (filled < length) {
+    const { bytesRead } = await entry.fh.read(buf, filled, length - filled, from + filled);
+    if (bytesRead <= 0) break; // short read: hand back what the disk actually gave
+    filled += bytesRead;
+  }
+  return filled === length ? buf : buf.subarray(0, filled);
+});
+
+ipcMain.handle("ms:close-range-file", async (_event, id) => closeManuscript(id));
+
+// A renderer that reloads or crashes never sends its close, so the descriptors
+// would sit open until the app quit.
+app.on("before-quit", async () => {
+  await Promise.all([...openManuscripts.keys()].map(closeManuscript));
 });
 
 // ---- Clipboard IPC handlers (renderer cannot access `clipboard` directly) ----
