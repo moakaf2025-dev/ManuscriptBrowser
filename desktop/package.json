@@ -8,7 +8,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "pack:win": "electron-builder --win dir --x64 --publish=never && python3 scripts/patch-exe-icon.py dist/win-unpacked/ManuscriptBrowser.exe icon.ico && electron-builder --win nsis portable --x64 --publish=never --prepackaged dist/win-unpacked"
+    "pack:win": "electron-builder --win dir --x64 --publish=never && (py -3.12 scripts/patch-exe-icon.py dist/win-unpacked/ManuscriptBrowser.exe icon.ico || python3 scripts/patch-exe-icon.py dist/win-unpacked/ManuscriptBrowser.exe icon.ico) && electron-builder --win nsis portable --x64 --publish=never --prepackaged dist/win-unpacked"
   },
   "build": {
     "appId": "com.moakaf.manuscriptbrowser",
